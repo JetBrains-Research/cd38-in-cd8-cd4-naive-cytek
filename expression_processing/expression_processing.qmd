@@ -364,7 +364,7 @@ ggplot(expression_all_genes_clustered, aes(UMAP1, UMAP2, color = Cluster)) +
   theme(panel.border = element_rect(color="black", fill=NA, size = 0.5)) 
 
 for(feature in c("CD3")) {
-  print(create_expression_umap_raster(sce, expression_CD3_selected_clustered, feature, features_max[[feature]], centers.umap_CD3))
+  print(create_expression_umap_raster(sce, expression_all_genes_clustered, feature, features_max[[feature]], centers.umap_all))
 }
 ```
 
