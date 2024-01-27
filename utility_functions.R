@@ -166,6 +166,25 @@ plotDR_2 <- function(x, dr = NULL,
     !vapply(colData(x)[y], is.numeric, logical(1)))
   return(TRUE)
 }
+.check_sce <- function(x, y = FALSE) {
+  stopifnot(
+    is(x, "SingleCellExperiment"), 
+    !is.null(x$sample_id))
+  if (y) 
+    stopifnot(
+      !is.null(x$cluster_id),
+      !is.null(metadata(x)$cluster_codes))
+}
+.check_k <- function(x, k) {
+  kids <- names(cluster_codes(x))
+  if (is.null(k)) return(kids[1])
+  stopifnot(length(k) == 1, is.character(k))
+  if (!k %in% kids)
+    stop("Clustering ", dQuote(k), 
+         " doesnt't exist; valid are",
+         " 'names(cluster_codes(x))'.")
+  return(k)
+}
 
 gauss <- function(x, mu, sigma, A) {
   return(A * dnorm(x, mu, sigma))
