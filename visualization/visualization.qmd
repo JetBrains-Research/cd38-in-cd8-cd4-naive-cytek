@@ -1,0 +1,313 @@
+---
+title: "Results visualization"
+subtitle: "Paper UMAPs, density plots, boxplots generation"
+author: "Petr Tsurinov"
+date: "01/26/2024"
+date-format: long
+format: html
+    
+knitr:
+  opts_chunk: 
+    collapse: true
+    
+execute:
+  freeze: auto  # re-render only when source changes
+---
+
+## Loading libraries, defining constants and loading files
+
+Loading required libraries/functions
+
+```{r}
+#| label: library-load
+
+library(CATALYST)
+library(stringr)
+library(ggplot2)
+library(dplyr)
+library("rasterpdf")
+library(minpack.lm)
+library(ggrastr)
+library(ggpubr)
+library(FSA)
+library(reshape2)
+source("../utility_functions.R")
+```
+
+Defining paths and constants, loading input files
+
+```{r}
+#| label: constants-define
+
+input_dir <- "../input_data/"
+intermediate_dir <- "../input_data/Intermediate_Pipeline_Files/"
+feature_column_indexes <- 4:46
+s.cols.grad <- c("#93cf92", "#87b2d4", "#ef7577", "#c195c8", "#ffb266", "#ffffff")
+expression_selected_features <- c("CxCR3", "CD38", "CD25", "CD3", "CD8", "CD4", "gdTCR", "TRAV2", "CD127", "CCR7", "CD45RA", "Fas", "PTK7")
+threshold_selected_features <- c("CxCR3", "CD38", "CD25", "PTK7")
+join_selected_features <- c("CxCR3", "CD38", "CD25")
+thresholds_siqma_coef <- list("CD8" = list("CxCR3" = 3, "CD38" = 3.49, "CD25" = 1.7, "PTK7" = 3), 
+                              "CD4" = list("CxCR3" = 6, "CD38" = 2.145, "CD25" = 2, "PTK7" = 3))
+thresholds_coef <- list("CD8" = list("CxCR3" = 0, "CD38" = 0, "CD25" = 0, "PTK7" = 0), 
+                        "CD4" = list("CxCR3" = 0.7, "CD38" = 2.8, "CD25" = 0.7, "PTK7" = 0))
+
+comparisons <- list(c("A", "E"))
+
+age_group_map <- list("A" = "A", "G" = "A", "M" = "A", "FA" = "A", "FG" = "A", "B" = "B", "H" = "B", "N" = "B", "FB" = "B", "FH" = "B", "C" = "C", "J" = "C", "P" = "C", "FC" = "C", "FJ" = "C", "D" = "D", "K" = "D", "S" = "D", "FD" = "D", "FK" = "D", "E" = "E", "L" = "E", "T" = "E", "FE" = "E", "FL" = "E", "A-T" = "T-A")
+
+donors_info <- read.table(paste0(input_dir, "Samples_Metadata_for_pipeline.csv"), sep = ";", dec = ",", header=TRUE)
+donors_info <- donors_info[c("Tube.ID", "Donor.ID", "Age")]
+
+features_max_df <- read.table(paste0(intermediate_dir, "features_max.csv"), sep = ";")
+features_max <- as.list(setNames(features_max_df[[2]], features_max_df[[1]]))
+
+cd8_naive <- read.table(paste0(intermediate_dir, "Expression_and_metadata_CD8_naive_cells_not_quantile_normalized.csv"), sep = ";", header = TRUE)
+cd4_naive <- read.table(paste0(intermediate_dir, "Expression_and_metadata_CD4_naive_no_Tregs_not_quantile_normalized.csv"), sep = ";", header = TRUE)
+
+cd8_naive_qnormed <- read.table(paste0(intermediate_dir, "Expression_and_metadata_CD8_naive_cells_6_cluster_marker_quantile_normalized.csv"), sep = ";", header = TRUE)
+cd4_naive_qnormed <- read.table(paste0(intermediate_dir, "Expression_and_metadata_CD4_naive_no_Tregs_6_cluster_markers_quantile_normalized.csv"), sep = ";", header = TRUE)
+
+n.cells_CD8 <- read.table(paste0(intermediate_dir, "n.cells_CD8.csv"), sep = ";", header = TRUE)
+n.cells_CD4 <- read.table(paste0(intermediate_dir, "n.cells_CD4.csv"), sep = ";", header = TRUE)
+
+cells_df_list <- list("CD8" = cd8_naive, "CD4" = cd4_naive)
+cells_df_qnormed_list <- list("CD8" = cd8_naive_qnormed, "CD4" = cd4_naive_qnormed)
+n.cells_all_cells_list <- list("CD8" = n.cells_CD8, "CD4" = n.cells_CD4)
+```
+
+## Constructing age groups density plots
+
+```{r fig.height=6, fig.width=10}
+#| label: agegroup-densities-plot
+
+rownames(donors_info) <- donors_info$Tube.ID
+donors_info <- donors_info[-1]
+donors_info$age_group <- str_replace(str_replace(donors_info$Donor.ID, "\\d+", ""), "F", "")
+
+age_group_labels <- c()
+age_groups_count <- table(donors_info$age_group)
+for(age_group in c("A", "B", "C", "D", "E")) {
+  age_group_labels <- c(age_group_labels, paste0(age_group, " (", age_groups_count[[age_group]], " samples)"))
+}
+
+ggplot(donors_info %>% arrange(donors_info[["age_group"]]), aes(x=Age, fill=age_group, color=age_group)) +
+  geom_density(alpha=0.8) +
+  scale_fill_manual(values=s.cols.grad, labels = age_group_labels) +
+  scale_color_manual(values=s.cols.grad, labels = age_group_labels) + 
+  scale_x_continuous(breaks = seq(25, 80, by = 5)) +
+  xlab("Age (years)") +
+  labs(fill = "Age group", color = "Age group") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+                  panel.background = element_blank(), axis.line = element_line(colour = "black"), 
+                  text = element_text(size = 8))
+```
+
+## Visualization of UMAPs expression for selected features and threshold densities plots creation
+
+```{r fig.height=6, fig.width=8}
+#| label: expression-UMAPs
+#| output-location: slide
+
+for(cell_type in names(cells_df_list)) {
+  cells_df <- cells_df_list[[cell_type]]
+  cells_df_qnormed <- cells_df_qnormed_list[[cell_type]]
+  feature_names <- colnames(cells_df_qnormed)[feature_column_indexes]
+  
+  sce <- SingleCellExperiment(list(counts=t(cells_df_qnormed[feature_names])))
+  sce@int_colData@listData$reducedDims$UMAP <- as.matrix(cells_df_qnormed[c("UMAP1", "UMAP2")])
+  
+  temp_expression <- cells_df_qnormed
+  temp_expression[feature_column_indexes][temp_expression[feature_column_indexes] < 0] <- 0
+  
+  for(feature in expression_selected_features) {
+    feature_max <- features_max[[feature]]
+    
+    temp_expression[[feature]] <- pmin(feature_max, temp_expression[[feature]])
+    sce@assays@data$exprs <- t(temp_expression[feature_names])
+    
+    plot <- plotDR_2(sce, "UMAP", color_by = feature, scale = FALSE, 
+                   a_pal = rev(hcl.colors(3, "Spectral")), color_range = c(0, feature_max), 
+                   used_in_clustering = paste("expression in", cell_type, "Naive cells")) + 
+            theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+                  panel.background = element_blank(), axis.line = element_line(colour = "black"), 
+                  text = element_text(size = 25))
+    
+    print(rasterize(plot, layers='Point', dpi=150))
+  }
+  
+  cells_df$cell_subtype <- "Mature"
+  cells_df_qnormed$cell_subtype <- "Mature"
+  
+  for(feature in rev(threshold_selected_features)) {
+    cells_df_merged_samples <- cells_df
+    cells_df_merged_samples$sample_id <- "Merged"
+    feature_merged_samples_fit_parameters <- fit_one_gaussian_and_return_parameters(cells_df_merged_samples, feature)
+    
+    feature_threshold <- (feature_merged_samples_fit_parameters["Merged", "mu"] + 
+                            thresholds_siqma_coef[[cell_type]][[feature]] * 
+                            feature_merged_samples_fit_parameters["Merged", "sigma"])
+    if(thresholds_coef[[cell_type]][[feature]] == 0) {
+      thresholds_coef[[cell_type]][[feature]] <- feature_threshold
+    }
+    
+    if(feature %in% join_selected_features) {
+      cells_df[cells_df[feature] > thresholds_coef[[cell_type]][[feature]], "cell_subtype"] <- paste0(feature, "+")
+      cells_df_qnormed[cells_df_qnormed[feature] > thresholds_coef[[cell_type]][[feature]], "cell_subtype"] <- paste0(feature, "+")
+    }
+    
+    print(ggplot(data = cells_df, aes_string(feature))+
+        ggtitle(paste(feature, "threshold in", cell_type, "Naive cells") ) +
+        geom_density(alpha = 0.8) +
+        geom_text(x=thresholds_coef[[cell_type]][[feature]], y=0.5, label=paste("Threshold:", format(round(thresholds_coef[[cell_type]][[feature]], 2), nsmall = 2)), 
+                  check_overlap = TRUE) +
+        geom_vline(xintercept = thresholds_coef[[cell_type]][[feature]],linetype="dashed") +
+        xlab(feature)+
+        theme_bw() )
+  }
+  
+  cells_df_list[[cell_type]] <- cells_df
+  cells_df_qnormed_list[[cell_type]] <- cells_df_qnormed
+}
+```
+
+## UMAPs with cells subtypes visualization
+
+```{r fig.height=5.5, fig.width=7}
+#| label: cell-subtypes-UMAPs
+
+legend_titles <- list("CxCR3" = "CxCR3 high", "CD38" = "CD38 high  ", "CD25" = "CD25 high  ", "PTK7" = "PTK7 high  ")
+
+for(cell_type in names(cells_df_list)) {
+  cells_df <- cells_df_list[[cell_type]]
+  cells_df_qnormed <- cells_df_qnormed_list[[cell_type]]
+  
+  for(feature in threshold_selected_features) {
+    cells_df_qnormed[[paste0(feature, "_high")]] <- cells_df_qnormed[[feature]] > thresholds_coef[[cell_type]][[feature]]
+    
+    print(rasterize(ggplot(cells_df_qnormed %>% arrange_(paste0(feature, "_high")), aes_string(x = "UMAP1", y = "UMAP2", color = paste0(feature, "_high"))) + 
+        geom_point_rast(size = 0.01) +
+        ggtitle(paste(cell_type, "Naive cells UMAP with high", feature, "cells selected")) +
+        labs(color = legend_titles[[feature]]) + 
+        theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+              panel.background = element_blank(), axis.line = element_line(colour = "black"), 
+              text = element_text(size = 20)) + guides(color = guide_legend(override.aes = list(size = 5))), layers='Point', dpi=150))
+  }
+  
+  cells_df$cell_subtype <- factor(cells_df$cell_subtype, levels = c(paste0(join_selected_features, "+"), "Mature"))
+  cells_df_qnormed$cell_subtype <- factor(cells_df_qnormed$cell_subtype, levels = c(paste0(join_selected_features, "+"), "Mature"))
+  
+  print(rasterize(ggplot(cells_df_qnormed %>% arrange(desc(cell_subtype)), aes(x = UMAP1, y = UMAP2, color = cell_subtype)) + 
+        geom_point_rast(size = 0.01) +
+        ggtitle(paste(cell_type, "Naive cells UMAP with selected markers")) +
+        labs(color = "Cell subtype") + 
+        scale_color_manual(values = c("#9B7A01", "#AA336A", "#023020", "#d3d3d3")) +
+        theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+              panel.background = element_blank(), axis.line = element_line(colour = "black"), 
+              text = element_text(size = 20)) + guides(color = guide_legend(override.aes = list(size = 5))), layers='Point', dpi=150))
+  
+  cells_df_list[[cell_type]] <- cells_df
+  cells_df_qnormed_list[[cell_type]] <- cells_df_qnormed
+}
+```
+
+## Boxplots for cells subtypes creation
+
+```{r fig.height=6, fig.width=10}
+#| label: boxplots-construction
+
+column_names <- c('naive_percent', 'CxCR3+', 'CD38+', 'CD25+', 'PTK7+', 'Mature')
+
+for(cell_type in names(cells_df_list)) {
+  names <- c(paste('%', cell_type, 'Naive from', cell_type, 'T cells'), paste('%', cell_type, 'CxCR3+ from', cell_type, 'Naive'), paste('%', cell_type, 'CD38+ from', cell_type, 'Naive'), paste('%', cell_type, 'CD25+ from', cell_type, 'Naive'), paste('%', cell_type, 'PTK7+ from', cell_type, 'Naive'), paste('%', cell_type, 'Mature from', cell_type, 'Naive'))
+  
+  cells_df <- cells_df_list[[cell_type]]
+  cells_df$age_group <- unlist(age_group_map[str_replace(str_replace(cells_df$sample_id, ".*-", ""), "\\d+", "")])
+  
+  n.cells_naive <- cells_df %>%
+        group_by(sample_id) %>%
+        dplyr::mutate(total_naive = n()) %>%
+          dplyr::select(sample_id, age_group, total_naive) %>%
+        distinct()
+  
+  n.cells_naive <- as.data.frame(n.cells_naive)
+  rownames(n.cells_naive) <- n.cells_naive$sample_id
+  n.cells_naive <- n.cells_naive[-1]
+  
+  n.cells_with_memory <- n.cells_all_cells_list[[cell_type]]
+  n.cells_with_memory <- as.data.frame(n.cells_with_memory)
+  rownames(n.cells_with_memory) <- n.cells_with_memory$sample_id
+  n.cells_with_memory <- n.cells_with_memory[-1]
+  
+  n.cells_naive_and_all <- merge(n.cells_with_memory, n.cells_naive["total_naive"], by="row.names", all.x = TRUE)
+  rownames(n.cells_naive_and_all) <- n.cells_naive_and_all$Row.names
+  n.cells_naive_and_all <- n.cells_naive_and_all[-1]
+  n.cells_naive_and_all[is.na(n.cells_naive_and_all$total_naive),"total_naive"] <- 0
+  n.cells_naive_and_all$naive_percent <- n.cells_naive_and_all$total_naive / n.cells_naive_and_all$total_cells * 100.0
+
+  features_plots <- list()
+  
+  features_plots[["main"]] <- ggplot(n.cells_naive_and_all, aes(x=age_group, y=naive_percent)) + 
+    geom_boxplot(outlier.size = 1.5,aes(fill=age_group), width=0.5) + 
+    geom_point(shape=21, size =1.5 , aes(fill=age_group)) + 
+    scale_fill_manual(values = s.cols.grad) +
+    stat_compare_means(comparisons = list(c("A", "E")),  method = "wilcox.test", label = "p.signif", 
+                       symnum.args = list(cutpoints = c(0, 0.001, 0.01, 0.05, 1), symbols = c("***","**","*","ns"))) +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(), panel.background = element_blank(), 
+          axis.line = element_line(colour = "black"), plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+          axis.text.x=element_text(size=12, colour = "black"), 
+          axis.title.x = element_text(size = 10),
+          axis.title.y = element_text(size = 10),
+          axis.text.y=element_text(size=12, colour = "black"), 
+          strip.text = element_text(size=11)) + 
+    ylab(paste("%", cell_type, "Naive from", cell_type, "T cells")) + xlab("Age group")
+  
+  for(feature in c(paste0(join_selected_features, "+"), "PTK7+", "Mature")) {
+    feature_high_df <- data.frame()
+    
+    if(feature == "PTK7+") {
+      feature_high_df <- cells_df[cells_df["PTK7"] > thresholds_coef[[cell_type]][["PTK7"]], ]
+    } else {
+      feature_high_df <- cells_df[cells_df$cell_subtype == feature,]
+    }
+      
+    n.cells_feature_high <- feature_high_df %>%
+          group_by(sample_id) %>%
+          dplyr::mutate(total_feature_high = n()) %>%
+            dplyr::select(sample_id, age_group, total_feature_high) %>%
+          distinct()
+    
+    n.cells_feature_high <- as.data.frame(n.cells_feature_high)
+    rownames(n.cells_feature_high) <- n.cells_feature_high$sample_id
+    n.cells_feature_high <- n.cells_feature_high[-1]
+    
+    n.cells_feature_high_and_all <- merge(n.cells_naive, n.cells_feature_high["total_feature_high"], by="row.names", all.x = TRUE)
+    
+    n.cells_feature_high_and_all[is.na(n.cells_feature_high_and_all)] <- 0
+    rownames(n.cells_feature_high_and_all) <- n.cells_feature_high_and_all$Row.names
+    n.cells_feature_high_and_all <- n.cells_feature_high_and_all[-1]
+    n.cells_feature_high_and_all$feature_high_percent <- n.cells_feature_high_and_all$total_feature_high / n.cells_feature_high_and_all$total_naive * 100.0
+    n.cells_feature_high_and_all$feature <- feature
+    
+    boxplot_feature <- ggplot(n.cells_feature_high_and_all, aes(x = age_group, y = feature_high_percent, fill = age_group)) +
+            geom_boxplot(outlier.size = 1.5,aes(fill=age_group), width=0.5) + 
+            geom_point(shape=21, size =1.5 , aes(fill=age_group)) + 
+            scale_fill_manual(values = s.cols.grad) +
+            stat_compare_means(comparisons = comparisons,  method = "wilcox.test", label = "p.signif",
+                               symnum.args = list(cutpoints = c(0, 0.001, 0.01, 0.05, 1), symbols = c("***","**","*","ns"))) +
+            theme(panel.grid.major = element_blank(), 
+                  panel.grid.minor = element_blank(), panel.background = element_blank(), 
+                  axis.line = element_line(colour = "black"), plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+                  axis.text.x=element_text(size=12, colour = "black"), 
+                  axis.title.x = element_text(size = 10),
+                  axis.title.y = element_text(size = 10),
+                  axis.text.y=element_text(size=12, colour = "black"), 
+                  strip.text = element_text(size=11)) + 
+            ylab(paste0("% ", cell_type, " Naive ", feature, " from ", cell_type, " Naive")) + xlab("Age group")
+
+    features_plots[[feature]] <- boxplot_feature
+  }
+  
+  print(ggarrange(features_plots$`main`, features_plots$`CxCR3+`, features_plots$`CD38+`, features_plots$`CD25+`, features_plots$`PTK7+`, features_plots$`Mature`, ncol = 3, nrow = 2))
+}
+```

@@ -1,3 +1,12 @@
+# Quarto files
+/.quarto/
+_freeze/
+_output/
+
+# Output files
+/results/expression_tables/*
+/results/output_pdfs/*
+
 # History files
 .Rhistory
 .Rapp.history

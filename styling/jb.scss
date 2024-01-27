@@ -1,0 +1,69 @@
+/*-- scss:defaults --*/
+
+@import url(https://fonts.googleapis.com/css?family=JetBrains%20Mono);
+@import url(https://fonts.googleapis.com/css?family=Inter);
+@import url(https://fonts.googleapis.com/css?family=Open+Sans:400,700,400italic);
+
+// fonts
+$font-family-sans-serif: 'Open Sans';
+$font-family-monospace: 'JetBrains Mono';
+
+// font sizes defaults
+$presentation-font-size-root: 28px;
+$presentation-font-smaller: 0.7;
+$presentation-line-height: 1.3;
+
+// theme colors
+
+$color_black: #000;
+$color_white: #ffffff;
+$color_dark_grey: #27282c;
+$color_theme_green: #28b8a0;
+$color_theme_orange: #fc801d;
+  $color_theme_red: #ff318c;
+$color_theme_purple: #6b57ff;
+$color_theme_blue: #087cfa;
+
+// theme sizes 
+$h1-font-size: 34pt;
+$h2-font-size: 20pt;
+
+// colors
+$body-bg: $color_white  !default;
+$body-color: $color_black !default;
+$link-color: $color_theme_red !default;
+$selection-bg: $color_theme_orange !default;
+
+// headings
+$presentation-heading-font: 'Inter';
+$presentation-heading-color: $color_black !default;
+
+/*-- scss:rules --*/
+
+.reveal a {
+  line-height: 1.3em;
+}
+
+.reveal .slide-logo {
+  max-height: 10rem !important;
+}
+
+.theme-green {
+  color: $color_theme_green;
+}
+
+.theme-orange {
+  color: $color_theme_orange;
+}
+
+.theme-red {
+  color: $color_theme_red;
+}
+
+.theme-purple {
+  color: $color_theme_purple;
+}
+
+.theme-blue {
+  color: $color_theme_blue;
+}

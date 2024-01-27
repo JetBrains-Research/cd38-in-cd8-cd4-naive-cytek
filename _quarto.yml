@@ -1,0 +1,43 @@
+project:
+  type: book
+  output-dir: _output
+
+book:
+  title: "Cytek data processing pipeline"
+  author: "Petr Tsurinov"
+  date: "1/26/2024"
+  chapters:
+    - index.qmd
+    - part: "Cytek data processing pipeline"
+      chapters:
+        - data_preprocessing/data_preprocessing.qmd
+        - expression_processing/expression_processing.qmd
+        - visualization/visualization.qmd
+
+toc-depth: 2
+number-sections: true
+bibliography: references.bib
+
+format:
+  html:
+    theme: [cosmo, styling/jb.scss]
+    execute:
+      echo: true
+      warning: false
+      freeze: auto
+  pdf: 
+    documentclass: report
+    geometry:
+      - top=30mm
+      - left=20mm
+      - heightrounded
+    fontfamily: libertinus
+    colorlinks: true
+    execute:
+      echo: false
+      warning: false
+      freeze: auto
+  
+
+
+

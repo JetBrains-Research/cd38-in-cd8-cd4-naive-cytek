@@ -1,0 +1,737 @@
+---
+title: "Expression processing"
+subtitle: "Cleaning and splitting events into cells subtypes"
+author: "Petr Tsurinov"
+date: "01/26/2024"
+date-format: long
+format: html
+    
+knitr:
+  opts_chunk: 
+    collapse: true
+    
+execute:
+  freeze: auto  # re-render only when source changes
+---
+
+## Loading libraries and defining constants
+
+Loading required libraries/functions
+
+```{r}
+#| label: library-load
+#| echo: true
+#| warning: false
+#| message: false
+library(flowCore)
+library(CATALYST)
+library(stringr)
+library(RColorBrewer)
+library(ggplot2)
+library(ggrastr)
+library(FastPG)
+library(dplyr)
+library(RefPlus)
+library(minpack.lm)
+source("../utility_functions.R")
+```
+
+Defining paths and constants, setting seed
+
+```{r}
+#| label: constants-define
+
+input_dir <- "../input_data/"
+output_dir <- "../input_data/Intermediate_Pipeline_Files/"
+fcs_transformed_downsampled_dir <- paste0(input_dir, "Transformed_Samples_Downsampled_FCS/")
+fluorochromes_markers_map_path <- paste0(input_dir, "Cytometry_Panel_for_pipeline.csv")
+age_group_map <- list("A" = "A", "G" = "A", "M" = "A", "FA" = "A", "FG" = "A", "B" = "B", "H" = "B", "N" = "B", "FB" = "B", "FH" = "B", "C" = "C", "J" = "C", "P" = "C", "FC" = "C", "FJ" = "C", "D" = "D", "K" = "D", "S" = "D", "FD" = "D", "FK" = "D", "E" = "E", "L" = "E", "T" = "E", "FE" = "E", "FL" = "E", "A-T" = "T-A")
+
+donors_info <- read.table(paste0(input_dir, "Samples_Metadata_for_pipeline.csv"), sep = ";", header=TRUE)
+donors_info <- donors_info[c("Tube.ID", "Age")]
+
+n_threads = 8
+seed_number = 5024
+
+set.seed(seed_number)
+
+getPalette.1 <- colorRampPalette(brewer.pal(9, "Set1"))
+```
+
+## Loading transformed and downsampled FCS files
+
+```{r}
+#| label: fcs-downsample-load
+
+fcs_transform_downsampled <- read.flowSet(path = fcs_transformed_downsampled_dir, pattern = "*.fcs", transformation = FALSE, truncate_max_range = FALSE)
+fcs_colname <- colnames(fcs_transform_downsampled)
+```
+
+## Loading mapping of fluorochromes to markers, creating panel and files dataframe
+
+```{r}
+#| label: panel-load
+
+fluorochromes_markers_map <- read.table(fluorochromes_markers_map_path, header = TRUE, sep = ";")
+rownames(fluorochromes_markers_map) <- fluorochromes_markers_map$Fluorochrome
+fluorochromes_markers_map <- fluorochromes_markers_map[-1]
+```
+
+Creating panel with fluorochromes used in input files and dividing matched markers into physical and biological
+
+```{r}
+#| label: panel-display
+
+panel <- data.frame(fcs_colname, fluorochromes_markers_map[fcs_colname, "Marker"], ifelse((is.na(fluorochromes_markers_map[fcs_colname, "Marker"]) | fcs_colname == fluorochromes_markers_map[fcs_colname, "Marker"]), "none", "type"), row.names = NULL)
+colnames(panel) <- c("fcs_colname", "antigen", "marker_class")
+rmarkdown::paged_table(panel)
+```
+
+Creating files dataframe
+
+```{r}
+#| label: files-display
+
+md <- data.frame(names(fcs_transform_downsampled@frames))
+colnames(md) <- "Sample_ID"
+md <- data.frame(md[order(md["Sample_ID"]),])
+colnames(md) <- "Sample_ID"
+
+file_names <- list.files(fcs_transformed_downsampled_dir)
+file_name <- fsApply(fcs_transform_downsampled, identifier)
+
+#check if the order of files in the directory and order of files in FlowSet object are matching
+if(!sum(file_name %in% file_names) == length(file_name)) {
+  stop("file names mismatch")
+} 
+
+md <- data.frame(sort(file_name), md, row.names = NULL)
+colnames(md) <- c("file_name", "Sample_ID")
+md$Group_ID <- "HC"
+md$batch <- "A"
+rmarkdown::paged_table(md)
+```
+
+## Functions for UMAP and clusterization construction for selected genes
+
+* sce_taken - CATALYST object with expression data
+* genes_taken - selected genes which values will be used for UMAP and clustering
+* n_threads - number of threads used for UMAP and clustering calculations
+* seed_number - used seed for results reproduction
+* k - k nearest neighbors value used in clustering
+* res - value for cluster number modification
+* recreate_graph - parameter for skipping part of clustering procedure
+
+```{r}
+#| label: expression-construction-functions
+
+construct_expression_table <- function(sce_taken, genes_taken, n_neighbors = 15, min_dist = 0.01, n_threads = 8, seed_number = 5024) {
+  meta <- data.frame(sce_taken@colData, stringsAsFactors = F)
+
+  expression_temp <- data.frame(t(sce_taken@assays@data$exprs))
+  expression_temp <- cbind(meta, expression_temp)
+  expression_temp <- cbind(expression_temp, data.frame(sce_taken@int_colData))
+  
+  expression_scaled <- scale(as.matrix(expression_temp[, genes_taken]))
+  
+  set.seed(seed_number)
+  umap.df <- uwot::umap(expression_scaled, n_threads = n_threads, n_neighbors = n_neighbors, min_dist = min_dist)
+  umap.df.coord <- data.frame(umap.df) %>%
+    dplyr::rename(UMAP1 = "X1", UMAP2 = "X2")
+  
+  expression_temp <- cbind(umap.df.coord, expression_temp)
+  
+  expression_temp
+}
+
+cluster_expression <- function(expression_temp, genes_taken, k = 100, res = 1.0, recreate_graph = TRUE, seed_number = 5024) {
+  expression_scaled <- scale(as.matrix(expression_temp[, genes_taken]))
+  
+  jar_path <- "networkanalysis-1.1.0.jar"
+  network_path <- tempfile(pattern = "network", fileext = ".txt")
+  clusters_path <- tempfile(pattern = "clusters", fileext = ".txt")
+  
+  if(recreate_graph) {
+    set.seed(seed_number)
+    # Approximate k nearest neighbors
+    all_knn <- RcppHNSW::hnsw_knn(expression_scaled, k= k, distance= 'l2', n_threads= 1)
+    ind <- all_knn$idx
+    
+    set.seed(seed_number)
+    # Parallel Jaccard metric
+    links <- FastPG::rcpp_parallel_jce(ind)
+    
+    set.seed(seed_number)
+    links <- FastPG::dedup_links(links)
+    links[,1] <- links[,1] - 1
+    links[,2] <- links[,2] - 1
+    
+    withr::with_options(c(scipen = 10), write.table(links, network_path, row.names = FALSE, col.names = FALSE, sep = "\t"))
+  }
+  system(paste("java  -Xmx100g -cp", jar_path, "nl.cwts.networkanalysis.run.RunNetworkClustering -r ", res, " -q Modularity --seed ", seed_number, " --weighted-edges -o", clusters_path, network_path))
+  
+  expression_temp$Cluster <- as.character(read.table(clusters_path)[[2]] + 1)
+
+  expression_temp   
+}
+```
+
+## Odd events removal using technical markers
+
+Constructing CATALYST object, UMAP and clusterization on technical markers for data cleaning
+
+```{r}
+#| label: sce-construction
+
+sce <- prepData(fcs_transform_downsampled, md = md, panel = panel, FACS = TRUE, transform = FALSE, md_cols = list(file = "file_name", id = "Sample_ID", factors = c("Group_ID", "batch")))
+names(md)
+assayNames(sce)[1] <- "exprs"
+```
+
+Selecting technical markers
+
+```{r}
+#| label: technical-features
+
+non_genes <- str_replace_all(as.vector(panel[panel$marker_class == "none", "antigen"]), "-| ", ".")
+non_genes_no_time <- setdiff(non_genes, c("Time"))
+```
+
+```{r}
+create_expression_umap_raster <- function(sce, expression_subtable, feature, feature_max, centers.umap) {
+  expression_subtable[6:(dim(expression_subtable)[2]-3)][expression_subtable[6:(dim(expression_subtable)[2]-3)] < 0] <- 0
+  expression_subtable[[feature]] <- pmin(expression_subtable[[feature]], feature_max)
+  sce_for_umap <- construct_sce(sce, expression_subtable)
+  plot <- plotDR_2(sce_for_umap, "UMAP", color_by = feature, scale = FALSE, 
+           a_pal = rev(hcl.colors(3, "Spectral")), color_range = c(0, feature_max), 
+           used_in_clustering = "") + 
+    geom_text(data = centers.umap, aes(label = Cluster, x = UMAP1, y = UMAP2), size = 2, color = "black")  +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+          panel.background = element_blank(), axis.line = element_line(colour = "black"), 
+          text = element_text(size = 10))
+      
+  rasterize(plot, layers='Point', dpi=150)
+}
+```
+
+Constructing UMAP for all events based on technical markers
+
+```{r}
+#| label: odd-events-removal
+
+expression <- construct_expression_table(sce, non_genes_no_time, n_threads = n_threads, seed_number = seed_number)
+expression <- cluster_expression(expression, non_genes_no_time, 20, 1.0, TRUE, seed_number)
+
+centers.umap_clearing <- expression %>% 
+  dplyr::group_by(Cluster) %>% 
+  dplyr::summarize(UMAP1 = median(UMAP1), UMAP2 = median(UMAP2)) 
+centers.umap_clearing$Cluster <- centers.umap_clearing$Cluster
+
+expression$sample_id <- str_replace(str_replace(expression$sample_id, "_Unmixed.fcs", ""), "-.* ", "-")
+expression$age_group <- unlist(age_group_map[str_replace(str_replace(expression$sample_id, ".*-", ""), "\\d+", "")])
+
+ggplot(expression, aes(UMAP1, UMAP2, color = Cluster)) +
+  geom_point_rast(size = 0.01) +
+  scale_color_manual(values = getPalette.1(length(unique(expression$Cluster))), guide = "none") +
+  theme_void() +
+  geom_text(data = centers.umap_clearing, aes(label=Cluster), size = 4, color = "black")  +
+  theme(panel.border = element_rect(color="black", fill=NA, size = 0.5))
+
+#Islands outside main island are debris, doublets and dead cells, so should be filtered out
+for(feature in c("FSC.A", "FSC.H", "SSC.A", "SSC.H", "SSC.B.H", "SSC.B.A", "LIVE.DEAD.Blue.A")) {
+  print(create_expression_umap_raster(sce, expression, feature, max(expression[[feature]]), centers.umap_clearing))
+}
+```
+
+Selecting clusters with odd events. All islands outside main one are removed
+
+```{r}
+#| label: odd-clusters-selection
+
+#Cluster numbers may differ, update according to UMAPs produced in previous chunk
+clusters_to_remove <- c(19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29)
+```
+
+## Identifying samples with high odd events percentage
+
+```{r}
+#| label: outliers-detection
+
+expression$cell_type <- "Kept"
+expression[expression$Cluster %in% clusters_to_remove,]$cell_type <- "Removed"
+
+n.cells <- expression %>%
+    group_by(sample_id) %>%
+    dplyr::mutate(total = n()) %>%
+    group_by(sample_id, cell_type) %>%
+    dplyr::mutate(cluster_count = n(),
+           cluster_percent = cluster_count / total * 100.) %>%
+      dplyr::select(sample_id, cell_type, age_group, total, cluster_count, cluster_percent) %>%
+    distinct()
+
+n.cells$Tube.ID <- str_replace(n.cells$sample_id, ".*-", "")
+n.cells <- merge(n.cells, donors_info, by="Tube.ID")
+n.cells$Age <- as.numeric(n.cells$Age)
+n.cells$sample_id <- factor(n.cells$sample_id, levels = unlist(unique(n.cells[order(n.cells$Age), "sample_id"])))
+
+print(ggplot(n.cells , aes(x = sample_id, y = cluster_percent, fill = age_group)) +
+    geom_bar(stat='identity') +
+    facet_wrap(~cell_type, scales = "free_y", nrow = 2) +
+    theme_bw() + xlab("")+ ylab("% from all cells") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+    + scale_fill_manual("age_group", values = c("A" = "#ff6c67", "B" = "#ba9f00", "C" = "#00bf0d", "D" = "#00c2c6", "E" = "#509bff", "T-A" = "#ff52e9")) + ggtitle("Cytek data samples qc"))
+
+print(ggplot(n.cells , aes(x = age_group, y = cluster_percent, fill = age_group)) +
+    geom_boxplot(color = "grey11", outlier.shape=NA, lwd = 0.25) +
+    geom_jitter(size = 1.7,  width = 0.1, pch = 21, stroke = 0.25) +
+    facet_wrap(~cell_type, scales = "free_y", nrow = 2) +
+    theme_bw() + xlab("")+ ylab("% from all cells")
+    + scale_fill_manual("age_group", values = c("A" = "#ff6c67", "B" = "#ba9f00", "C" = "#00bf0d", "D" = "#00c2c6", "E" = "#509bff", "T-A" = "#ff52e9")) + ggtitle("Cytek data samples qc"))
+
+n.cells[order(n.cells$cluster_percent),]
+```
+
+## Cleared events QC on technical features
+
+SCE object construction function and raster UMAP for selected feature expression creation function
+
+```{r}
+#| label: sce-umap-functions
+
+construct_sce <- function(sce, expression_subtable) {
+  sce_created <- SingleCellExperiment(list(counts=t(expression_subtable[str_replace_all(rownames(sce@assays@data$exprs), "-| ", ".")])))
+  sce_created@rowRanges <- sce@rowRanges
+  sce_created@metadata <- sce@metadata
+  sce_created@assays@data$exprs <- t(expression_subtable[str_replace_all(rownames(sce@assays@data$exprs), "-| ", ".")])
+  sce_created@int_colData@listData$reducedDims$UMAP <- as.matrix(expression_subtable[c("UMAP1", "UMAP2")])
+  sce_created@colData$cluster_id <- expression_subtable$Cluster
+  sce_created$sample_id <- expression_subtable$sample_id
+  
+  sce_created
+}
+```
+
+Checking that cleared events don't produce separate islands during clustering on technical features
+
+```{r}
+#| label: qc-filtered-expression
+
+#qc on technical features after cleaning
+#Filtered cells; Technical features;
+expression_no_outliers <- expression[!(expression$sample_id %in% c("pb086-L01")),]
+
+expression_filtered <- expression_no_outliers[!(expression_no_outliers$Cluster %in% clusters_to_remove),]
+
+sce_created <- construct_sce(sce, expression_filtered)
+expression_filtered_clustered <- construct_expression_table(sce_created, non_genes_no_time, n_threads = n_threads, seed_number = seed_number)
+expression_filtered_clustered <- cluster_expression(expression_filtered_clustered, non_genes_no_time, 20, 1.0, TRUE, seed_number)
+
+centers.umap_filtered <- expression_filtered_clustered %>% 
+  dplyr::group_by(Cluster) %>% 
+  dplyr::summarize(UMAP1 = median(UMAP1), UMAP2 = median(UMAP2)) 
+
+ggplot(expression_filtered_clustered, aes(UMAP1, UMAP2, color = Cluster)) +
+  geom_point_rast(size = 0.01) +
+  scale_color_manual(values = getPalette.1(length(unique(expression_filtered_clustered$Cluster))), guide = "none") +
+  theme_void() +
+  geom_text(data = centers.umap_filtered, aes(label=Cluster), size = 4, color = "black")  +
+  theme(panel.border = element_rect(color="black", fill=NA, size = 0.5)) 
+```
+
+```{r}
+#| label: max-values-set
+
+features_max <- apply(expression_filtered[6:(dim(expression_filtered)[2]-3)], 2 , quantile , probs = c(0.99))
+write.table(features_max, paste0(output_dir, "features_max.csv"), sep = ";", col.names = FALSE)
+```
+
+## Clustering all cells on all biological markers
+
+```{r}
+#| label: all-cells-clusterization
+
+genes <- str_replace(as.vector(panel[panel$marker_class == "type", "antigen"]), "-", ".")
+
+expression_all_genes_clustered <- construct_expression_table(sce_created, genes, n_threads = n_threads, seed_number = seed_number)
+expression_all_genes_clustered <- cluster_expression(expression_all_genes_clustered, genes, 100, 1.0, TRUE, seed_number)
+
+centers.umap_all <- expression_all_genes_clustered %>% 
+  dplyr::group_by(Cluster) %>% 
+  dplyr::summarize(UMAP1 = median(UMAP1), UMAP2 = median(UMAP2)) 
+
+ggplot(expression_all_genes_clustered, aes(UMAP1, UMAP2, color = Cluster)) +
+  geom_point_rast(size = 0.01) +
+  scale_color_manual(values = getPalette.1(length(unique(expression_all_genes_clustered$Cluster))), guide = "none") +
+  theme_void() +
+  geom_text(data = centers.umap_all, aes(label=Cluster), size = 2, color = "black")  +
+  theme(panel.border = element_rect(color="black", fill=NA, size = 0.5)) 
+
+for(feature in c("CD3")) {
+  print(create_expression_umap_raster(sce, expression_CD3_selected_clustered, feature, features_max[[feature]], centers.umap_CD3))
+}
+```
+
+## Clustering T cells on all biological markers
+
+```{r}
+#| label: cd3-cells-clusterization
+
+#Cluster numbers may differ, update according to UMAPs produced in previous chunk
+expression_CD3_selected <- expression_all_genes_clustered[expression_all_genes_clustered$Cluster %in% c(1, 11, 10, 31, 7, 14, 4, 23, 13, 22, 26, 6, 34, 8, 16, 24, 9, 29, 18),]
+
+sce_created <- construct_sce(sce, expression_CD3_selected)
+expression_CD3_selected_clustered <- construct_expression_table(sce_created, genes, n_threads = n_threads, seed_number = seed_number)
+expression_CD3_selected_clustered <- cluster_expression(expression_CD3_selected_clustered, genes, 100, 1.0, TRUE, seed_number)
+
+centers.umap_CD3 <- expression_CD3_selected_clustered %>% 
+  dplyr::group_by(Cluster) %>% 
+  dplyr::summarize(UMAP1 = median(UMAP1), UMAP2 = median(UMAP2)) 
+
+ggplot(expression_CD3_selected_clustered, aes(UMAP1, UMAP2, color = Cluster)) +
+  geom_point_rast(size = 0.01) +
+  scale_color_manual(values = getPalette.1(length(unique(expression_CD3_selected_clustered$Cluster))), guide = "none") +
+  theme_void() +
+  geom_text(data = centers.umap_CD3, aes(label=Cluster), size = 2, color = "black")  +
+  theme(panel.border = element_rect(color="black", fill=NA, size = 0.5)) 
+
+for(feature in c("CD4", "CD8")) {
+  print(create_expression_umap_raster(sce, expression_CD3_selected_clustered, feature, features_max[[feature]], centers.umap_CD3))
+}
+```
+
+```{r}
+#| label: cd8-cd4-selection
+
+#Cluster numbers may differ, update according to UMAPs produced in previous chunk
+expression_CD8_selected <- expression_CD3_selected_clustered[expression_CD3_selected_clustered$Cluster %in% c(4, 7, 24, 13, 5, 15, 20),]
+expression_CD4_selected <- expression_CD3_selected_clustered[expression_CD3_selected_clustered$Cluster %in% c(16, 11, 26, 2, 9, 12, 8, 23, 17, 6, 1, 25, 3, 14),]
+```
+
+## Clustering CD8 T cells on all biological markers
+
+```{r}
+#| label: cd8-cells-clusterization
+
+sce_created <- construct_sce(sce, expression_CD8_selected)
+expression_CD8_selected_clustered <- construct_expression_table(sce_created, genes, n_threads = n_threads, seed_number = seed_number)
+expression_CD8_selected_clustered <- cluster_expression(expression_CD8_selected_clustered, genes, 100, 1.0, TRUE, seed_number)
+
+centers.umap_CD8 <- expression_CD8_selected_clustered %>% 
+  dplyr::group_by(Cluster) %>% 
+  dplyr::summarize(UMAP1 = median(UMAP1), UMAP2 = median(UMAP2)) 
+
+ggplot(expression_CD8_selected_clustered, aes(UMAP1, UMAP2, color = Cluster)) +
+  geom_point_rast(size = 0.01) +
+  scale_color_manual(values = getPalette.1(length(unique(expression_CD8_selected_clustered$Cluster))), guide = "none") +
+  theme_void() +
+  geom_text(data = centers.umap_CD8, aes(label=Cluster), size = 2, color = "black")  +
+  theme(panel.border = element_rect(color="black", fill=NA, size = 0.5)) 
+
+for(feature in c("CD45RA", "CCR7", "Fas")) {
+  print(create_expression_umap_raster(sce, expression_CD8_selected_clustered, feature, features_max[[feature]], centers.umap_CD8))
+}
+```
+
+## Clustering CD8 naive T cells on all biological markers
+
+Quantile normalization to median function for decreasing difference between samples
+
+```{r}
+#| label: qnorm-median-function
+
+quantile_normalize_marker_median <- function(expression_for_qnorm, marker) {
+  sample_df <- data.frame()
+  
+  for(sample_id in unique(expression_for_qnorm$sample_id)) {
+    if(dim(sample_df)[1] == 0) {
+      sample_df <- expression_for_qnorm[expression_for_qnorm$sample_id == sample_id,][c(marker)]
+    }
+    else {
+      sample_df <- cbind(sample_df, expression_for_qnorm[expression_for_qnorm$sample_id == sample_id,][c(marker)])
+    }
+    colnames(sample_df)[dim(sample_df)[2]] <- sample_id
+  }
+  
+  sample_df_sorted <- sample_df
+  for(sample_id in unique(expression_for_qnorm$sample_id)) {
+    sample_df_sorted[[sample_id]] <- sort(sample_df_sorted[[sample_id]])
+  }
+  sample_df_median <- rowMedians(as.matrix(sample_df_sorted))
+
+  sample_df_qnorm_median <- as.data.frame(normalize.quantiles2(sample_df, sample_df_median))
+  colnames(sample_df_qnorm_median) <- colnames(sample_df)
+  
+  sample_df_long <- data.frame()
+  
+  for(sample_id in unique(expression_for_qnorm$sample_id)) {
+    temp_df <- sample_df_qnorm_median[sample_id]
+    temp_df$sample_id <- sample_id
+    colnames(temp_df) <- c(marker, "sample_id")
+    
+    sample_df_long <- rbind(sample_df_long, temp_df)
+  }
+  
+  rownames(sample_df_long) <- rownames(expression_for_qnorm)
+  
+  return(sample_df_long)
+}
+```
+
+Clustering CD8 naive cells on 6 markers - CD27, CD127, CD38, CD25, CxCR3, CD28
+
+```{r}
+#| label: cd8-naive-cells-clusterization
+
+#Cluster numbers may differ, update according to UMAPs produced in CD8 clusterization chunk
+cd8_naive_selected_clusters <- c(1, 7, 9)
+expression_CD8_naive_selected <- expression_CD8_selected_clustered[expression_CD8_selected_clustered$Cluster %in% cd8_naive_selected_clusters,]
+expression_CD8_naive_selected_no_outliers <- expression_CD8_naive_selected[!(expression_CD8_naive_selected$sample_id %in% c("pb088-E06", "pb089-E12", "pb086-D01")),]
+
+genes <- c("CD27", "CD127", "CD38", "CD25", "CxCR3", "CD28")
+
+for(gene in genes) {
+  qnormed_marker <- quantile_normalize_marker_median(expression_no_outliers, gene)
+  expression_CD8_naive_selected_no_outliers[[gene]] <- qnormed_marker[rownames(expression_CD8_naive_selected_no_outliers), gene]
+}
+
+sce_created <- construct_sce(sce, expression_CD8_naive_selected_no_outliers)
+expression_CD8_naive_selected_no_outliers_clustered <- construct_expression_table(sce_created, genes, 15, 0.3)
+expression_CD8_naive_selected_no_outliers_clustered <- cluster_expression(expression_CD8_naive_selected_no_outliers_clustered, genes, 100, 0.23, TRUE)
+
+centers.umap_CD8_naive_no_outliers <- expression_CD8_naive_selected_no_outliers_clustered %>% 
+  dplyr::group_by(Cluster) %>% 
+  dplyr::summarize(UMAP1 = median(UMAP1), UMAP2 = median(UMAP2)) 
+
+for(feature in c("CxCR3", "CD25", "CD38", "PTK7")) {
+  print(create_expression_umap_raster(sce, expression_CD8_naive_selected_no_outliers_clustered, feature, features_max[[feature]], centers.umap_CD8_naive_no_outliers))
+}
+```
+
+Exporting CD8 naive cells for further figures visualization 
+
+```{r}
+#| label: cd8-cells-export
+
+expression_CD8_naive_selected_no_outliers_clustered$age_group <- unlist(age_group_map[str_replace(str_replace(expression_CD8_naive_selected_no_outliers_clustered$sample_id, ".*-", ""), "\\d+", "")])
+
+write.table(expression_CD8_naive_selected_no_outliers_clustered[,!names(expression_CD8_naive_selected_no_outliers_clustered) %in% c("cluster_id", "reducedDims.UMAP.UMAP1", "reducedDims.UMAP.UMAP2")], paste0(output_dir, "Expression_and_metadata_CD8_naive_cells_6_cluster_marker_quantile_normalized.csv"), sep = ";", row.names = FALSE)
+
+expression_CD8_naive_export <- expression_CD8_selected_clustered[expression_CD8_selected_clustered$Cluster %in% cd8_naive_selected_clusters,]
+
+write.table(expression_CD8_naive_export[,!names(expression_CD8_naive_export) %in% c("UMAP1", "UMAP2", "cluster_id", "reducedDims.UMAP.UMAP1", "reducedDims.UMAP.UMAP2", "Cluster")], paste0(output_dir, "Expression_and_metadata_CD8_naive_cells_not_quantile_normalized.csv"), sep = ";", row.names = FALSE)
+
+expression_CD8_selected$age_group <- unlist(age_group_map[str_replace(str_replace(expression_CD8_selected$sample_id, ".*-", ""), "\\d+", "")])
+n.cells_CD8 <- expression_CD8_selected %>%
+      group_by(sample_id) %>%
+      dplyr::mutate(total_cells = n()) %>%
+        dplyr::select(sample_id, age_group, total_cells) %>%
+      distinct()
+write.table(n.cells_CD8[!(n.cells_CD8$sample_id %in% c("pb088-E06", "pb089-E12", "pb086-D01")),], paste0(output_dir, "n.cells_CD8.csv"), sep = ";", row.names = FALSE)
+```
+
+## Clustering CD4 T cells on all biological markers except TRAV2
+
+```{r}
+#| label: cd4-cells-clusterization
+
+expression_CD4_selected_no_outliers <- expression_CD4_selected[!(expression_CD4_selected$sample_id %in% c("pb090-C03")),]
+
+genes <- str_replace(as.vector(panel[panel$marker_class == "type", "antigen"]), "-", ".")
+genes <- setdiff(genes, c("TRAV2"))
+
+sce_created <- construct_sce(sce, expression_CD4_selected_no_outliers)
+expression_CD4_selected_clustered <- construct_expression_table(sce_created, genes, n_threads = n_threads, seed_number = seed_number)
+expression_CD4_selected_clustered <- cluster_expression(expression_CD4_selected_clustered, genes, 100, 1.0, TRUE, seed_number)
+
+centers.umap_CD4 <- expression_CD4_selected_clustered %>% 
+  dplyr::group_by(Cluster) %>% 
+  dplyr::summarize(UMAP1 = median(UMAP1), UMAP2 = median(UMAP2)) 
+
+ggplot(expression_CD4_selected_clustered, aes(UMAP1, UMAP2, color = Cluster)) +
+  geom_point_rast(size = 0.01) +
+  scale_color_manual(values = getPalette.1(length(unique(expression_CD4_selected_clustered$Cluster))), guide = "none") +
+  theme_void() +
+  geom_text(data = centers.umap_CD4, aes(label=Cluster), size = 4, color = "black")  +
+  theme(panel.border = element_rect(color="black", fill=NA, size = 0.5))
+
+for(feature in c("CD19", "CD14", "CD56", "gdTCR", "CD8")) {
+  print(create_expression_umap_raster(sce, expression_CD4_selected_clustered, feature, features_max[[feature]], centers.umap_CD4))
+}
+```
+
+## Clustering CD4 T cells without leftover doublets, NK cells, γδT cells, CD8+ cells on all biological markers except TRAV2
+
+```{r}
+#| label: cd4-first-filtering-clusterization
+
+#Cluster numbers may differ, update according to UMAPs produced in previous chunk
+expression_CD4_first_filtering <- expression_CD4_selected_clustered[!(expression_CD4_selected_clustered$Cluster %in% c(10, 12, 13, 14, 16)),]
+
+genes <- str_replace(as.vector(panel[panel$marker_class == "type", "antigen"]), "-", ".")
+genes <- setdiff(genes, c("TRAV2"))
+
+sce_created <- construct_sce(sce, expression_CD4_first_filtering)
+expression_CD4_first_filtering_clustered <- construct_expression_table(sce_created, genes, n_threads = n_threads, seed_number = seed_number)
+expression_CD4_first_filtering_clustered <- cluster_expression(expression_CD4_first_filtering_clustered, genes, 100, 1.0, TRUE, seed_number)
+
+centers.umap_CD4_first_filtering <- expression_CD4_first_filtering_clustered %>% 
+  dplyr::group_by(Cluster) %>% 
+  dplyr::summarize(UMAP1 = median(UMAP1), UMAP2 = median(UMAP2)) 
+
+ggplot(expression_CD4_first_filtering_clustered, aes(UMAP1, UMAP2, color = Cluster)) +
+  geom_point_rast(size = 0.01) +
+  scale_color_manual(values = getPalette.1(length(unique(expression_CD4_first_filtering_clustered$Cluster))), guide = "none") +
+  theme_void() +
+  geom_text(data = centers.umap_CD4_first_filtering, aes(label=Cluster), size = 4, color = "black")  +
+  theme(panel.border = element_rect(color="black", fill=NA, size = 0.5))
+
+for(feature in c("NKp80")) {
+  print(create_expression_umap_raster(sce, expression_CD4_first_filtering_clustered, feature, features_max[[feature]], centers.umap_CD4_first_filtering))
+}
+```
+
+## Clustering filtered CD4 T cells without NKp80+ cells on 6 markers - CD8, CD4, CD3, gdTCR, Fas, CD45RA
+
+```{r}
+#| label: cd4-second-filtering-clusterization
+
+expression_CD4_second_filtering <- expression_CD4_first_filtering_clustered[!(expression_CD4_first_filtering_clustered$Cluster %in% c(12)),]
+
+sce_created <- construct_sce(sce, expression_CD4_second_filtering)
+genes <- str_replace(as.vector(panel[panel$marker_class == "type", "antigen"]), "-", ".")
+genes <- c("CD8", "CD4", "CD3", "gdTCR", "Fas", "CD45RA")
+
+expression_CD4_second_clearing_clustered <- construct_expression_table(sce_created, genes, n_threads = n_threads, seed_number = seed_number)
+expression_CD4_second_clearing_clustered <- cluster_expression(expression_CD4_second_clearing_clustered, genes, 20, 1.0, TRUE, seed_number)
+
+centers.umap_CD4_second_clearing <- expression_CD4_second_clearing_clustered %>% 
+  dplyr::group_by(Cluster) %>% 
+  dplyr::summarize(UMAP1 = median(UMAP1), UMAP2 = median(UMAP2)) 
+
+ggplot(expression_CD4_second_clearing_clustered, aes(UMAP1, UMAP2, color = Cluster)) +
+  geom_point_rast(size = 0.01) +
+  scale_color_manual(values = getPalette.1(length(unique(expression_CD4_second_clearing_clustered$Cluster))), guide = "none") +
+  theme_void() +
+  geom_text(data = centers.umap_CD4_second_clearing, aes(label=Cluster), size = 4, color = "black")  +
+  theme(panel.border = element_rect(color="black", fill=NA, size = 0.5))
+
+# Removing cells with low CD4
+for(feature in c("CD4")) {
+  print(create_expression_umap_raster(sce, expression_CD4_second_clearing_clustered, feature, features_max[[feature]], centers.umap_CD4_second_clearing))
+}
+```
+
+## Gating CD4 cleared cells on CD45RA and Fas features for obtaining CD4 naive cells
+
+```{r}
+#| label: cd4-gating-cd45ra-fas
+
+#Cluster numbers may differ, update according to UMAPs produced in previous chunk
+expression_CD4_cleared <- expression_CD4_second_clearing_clustered[!(expression_CD4_second_clearing_clustered$Cluster %in% c(21)),]
+
+cd45ra_thresholds <- fit_gaussians_and_find_thresholds(expression_CD4_cleared, "CD45RA", "", -1, 6)
+rownames(cd45ra_thresholds$thresholds) <- cd45ra_thresholds$thresholds$sample_id
+cd45ra_high <- expression_CD4_cleared$CD45RA > cd45ra_thresholds$thresholds[expression_CD4_cleared$sample_id, "samples_thresholds"]
+
+expression_CD45RA_pos_all_CD4 <- expression_CD4_cleared[cd45ra_high,]
+
+cd45ra_final_thresholds <- fit_one_gaussian_and_find_thresholds(expression_CD45RA_pos_all_CD4, "CD45RA", "", -1, 6, -1.5)
+rownames(cd45ra_final_thresholds$thresholds) <- cd45ra_final_thresholds$thresholds$sample_id
+
+fas_thresholds <- fit_one_gaussian_and_find_thresholds(expression_CD45RA_pos_all_CD4, "Fas", "", -2, 4, 1.0)
+rownames(fas_thresholds$thresholds) <- fas_thresholds$thresholds$sample_id
+
+cd45ra_high_fas_low_all_CD4 <- expression_CD4_cleared$CD45RA > cd45ra_final_thresholds$thresholds[expression_CD4_cleared$sample_id, "samples_thresholds"] & expression_CD4_cleared$Fas < fas_thresholds$thresholds[expression_CD4_cleared$sample_id, "samples_thresholds"]
+```
+
+## Clustering naive CD4 T cells on 9 markers - CD4, CD3, CD45RA, CCR7, CxCR3, CD31, Fas, CD25, CD127
+
+```{r}
+#| label: cd4-naive-clusterization
+
+expression_CD4_naive <- expression_CD4_cleared[cd45ra_high_fas_low_all_CD4,]
+
+genes <- c("CD4", "CD3", "CD45RA", "CCR7", "CxCR3", "CD31", "Fas", "CD25", "CD127")
+
+sce_created <- construct_sce(sce, expression_CD4_naive)
+expression_CD4_naive_clustered <- construct_expression_table(sce_created, genes)
+expression_CD4_naive_clustered <- cluster_expression(expression_CD4_naive_clustered, genes, 20, 0.4, TRUE)
+
+centers.umap_CD4_naive <- expression_CD4_naive_clustered %>% 
+  dplyr::group_by(Cluster) %>% 
+  dplyr::summarize(UMAP1 = median(UMAP1), UMAP2 = median(UMAP2)) 
+
+ggplot(expression_CD4_naive_clustered, aes(UMAP1, UMAP2, color = Cluster)) +
+  geom_point_rast(size = 0.01) +
+  scale_color_manual(values = getPalette.1(length(unique(expression_CD4_naive_clustered$Cluster))), guide = "none") +
+  theme_void() +
+  geom_text(data = centers.umap_CD4_naive, aes(label=Cluster), size = 4, color = "black")  +
+  theme(panel.border = element_rect(color="black", fill=NA, size = 0.5))
+
+for(feature in c("CD25")) {
+  print(create_expression_umap_raster(sce, expression_CD4_naive_clustered, feature, features_max[[feature]], centers.umap_CD4_naive))
+}
+```
+
+## Clustering naive CD4 T cells without Tregs on 9 markers - CD38, CD25, CD127, CD27, CD28, CxCR3
+
+```{r}
+#| label: cd4-naive-no-tregs-clusterization
+
+outlier_cd45ra_samples <- c("pb086-D01", "pb086-B14", "pb090-D03") 
+marker_outlier_samples <- c("pb086-FB04", "pb090-B02")
+
+#Cluster numbers may differ, update according to UMAPs produced in previous chunk
+cd4_tregs_clusters <- c(5)
+expression_CD4_naive_no_Tregs_no_outliers <- expression_CD4_naive_clustered[!(expression_CD4_naive_clustered$Cluster %in% cd4_tregs_clusters),]
+expression_CD4_naive_no_Tregs_no_outliers <- expression_CD4_naive_no_Tregs_no_outliers[!(expression_CD4_naive_no_Tregs_no_outliers$sample_id %in% c(outlier_cd45ra_samples, marker_outlier_samples)),]
+
+genes <- c("CD38", "CD25", "CD127", "CD27", "CD28", "CxCR3")
+
+for(gene in genes) {
+  qnormed_marker <- quantile_normalize_marker_median(expression_no_outliers, gene)
+  expression_CD4_naive_no_Tregs_no_outliers[[gene]] <- qnormed_marker[rownames(expression_CD4_naive_no_Tregs_no_outliers), gene]
+}
+
+sce_created <- construct_sce(sce, expression_CD4_naive_no_Tregs_no_outliers)
+expression_CD4_naive_no_Tregs_no_outliers_clustered <- construct_expression_table(sce_created, genes, 15, 0.3, n_threads = n_threads, seed_number = seed_number)
+expression_CD4_naive_no_Tregs_no_outliers_clustered <- cluster_expression(expression_CD4_naive_no_Tregs_no_outliers_clustered, genes, 20, 0.21, TRUE)
+
+centers.umap_CD4_naive_no_Tregs_no_outliers <- expression_CD4_naive_no_Tregs_no_outliers_clustered %>% 
+  dplyr::group_by(Cluster) %>% 
+  dplyr::summarize(UMAP1 = median(UMAP1), UMAP2 = median(UMAP2)) 
+
+ggplot(expression_CD4_naive_no_Tregs_no_outliers_clustered, aes(UMAP1, UMAP2, color = Cluster)) +
+  geom_point_rast(size = 0.01) +
+  scale_color_manual(values = getPalette.1(length(unique(expression_CD4_naive_no_Tregs_no_outliers_clustered$Cluster))), guide = "none") +
+  #theme_void() +
+  geom_text(data = centers.umap_CD4_naive_no_Tregs_no_outliers, aes(label=Cluster), size = 4, color = "black")  +
+  theme(panel.border = element_rect(color="black", fill=NA, size = 0.5))
+
+for(feature in c("CxCR3", "CD25", "CD38", "PTK7")) {
+  print(create_expression_umap_raster(sce, expression_CD4_naive_no_Tregs_no_outliers_clustered, feature, features_max[[feature]], centers.umap_CD4_naive_no_Tregs_no_outliers))
+}
+```
+
+Exporting CD4 naive cells for further figures visualization 
+
+```{r}
+#| label: cd4-cells-export
+#| 
+expression_CD4_naive_no_Tregs_no_outliers_clustered$age_group <- unlist(age_group_map[str_replace(str_replace(expression_CD4_naive_no_Tregs_no_outliers_clustered$sample_id, ".*-", ""), "\\d+", "")])
+
+write.table(expression_CD4_naive_no_Tregs_no_outliers_clustered[,!names(expression_CD4_naive_no_Tregs_no_outliers_clustered) %in% c("cluster_id", "reducedDims.UMAP.UMAP1", "reducedDims.UMAP.UMAP2")], paste0(output_dir, "Expression_and_metadata_CD4_naive_no_Tregs_6_cluster_markers_quantile_normalized.csv"), sep = ";", row.names = FALSE)
+
+expression_CD4_naive_no_Tregs_export <- expression_CD4_naive_clustered[!(expression_CD4_naive_clustered$Cluster %in% cd4_tregs_clusters | expression_CD4_naive_clustered$sample_id %in% c(outlier_cd45ra_samples, marker_outlier_samples)),]
+expression_CD4_naive_no_Tregs_export$age_group <- unlist(age_group_map[str_replace(str_replace(expression_CD4_naive_no_Tregs_export$sample_id, ".*-", ""), "\\d+", "")])
+
+write.table(expression_CD4_naive_no_Tregs_export[,!names(expression_CD4_naive_no_Tregs_export) %in% c("UMAP1", "UMAP2", "cluster_id", "reducedDims.UMAP.UMAP1", "reducedDims.UMAP.UMAP2", "Cluster")], paste0(output_dir, "Expression_and_metadata_CD4_naive_no_Tregs_not_quantile_normalized.csv"), sep = ";", row.names = FALSE)
+
+expression_CD4_selected_no_outliers$age_group <- unlist(age_group_map[str_replace(str_replace(expression_CD4_selected_no_outliers$sample_id, ".*-", ""), "\\d+", "")])
+n.cells_CD4 <- expression_CD4_selected_no_outliers %>%
+      group_by(sample_id) %>%
+      dplyr::mutate(total_cells = n()) %>%
+        dplyr::select(sample_id, age_group, total_cells) %>%
+      distinct()
+write.table(n.cells_CD4[!(n.cells_CD4$sample_id %in% c(outlier_cd45ra_samples, marker_outlier_samples)),], paste0(output_dir, "n.cells_CD4.csv"), sep = ";", row.names = FALSE)
+```
+

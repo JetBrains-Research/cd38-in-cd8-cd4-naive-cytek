@@ -1,0 +1,108 @@
+---
+title: "Data preprocessing"
+subtitle: "Provided FCS files transformation and downsampling"
+author: "Petr Tsurinov"
+date: "01/26/2024"
+date-format: long
+format: html
+    
+knitr:
+  opts_chunk: 
+    collapse: true
+    
+execute:
+  freeze: auto  # re-render only when source changes
+---
+
+## Loading libraries and defining constants
+
+Setting seed and loading required libraries/functions
+
+```{r}
+#| label: library-load
+#| echo: true
+#| warning: false
+#| message: false
+
+seed_number = 5024
+set.seed(seed_number)
+
+library(flowCore)
+library(flowVS)
+
+source("../utility_functions.R")
+```
+
+Defining paths and constants
+
+```{r}
+#| label: constants-define
+
+input_dir <- "../input_data/"
+data_folder_path <- paste0(input_dir, "Unmixed_Samples_FCS/")
+fcs_transformed_dir <- paste0(input_dir, "Transformed_Samples_FCS/")
+fcs_transformed_downsampled_dir <- paste0(input_dir, "Transformed_Samples_Downsampled_FCS/")
+
+transformation_cofactor <- 3000 # default value for Cytek data transformation
+downsampling_count <- 10000 # amount of events taken in analysis from every sample file
+```
+
+## FCS files load
+
+Data for our Cytek experiments may be obtained from dedicated [box](http://box.com) folder
+
+-   Input data are tables with fluorochromes as columns and intensity as values
+-   Table is provided for each sample in a FCS file
+-   Number of rows represents events and usually 50,000 - 300,000
+-   Data in range -10^7^..10^7^
+
+![Example of flurochrome density for one sample](images/FCS_PerCP-A_flurochrome_density.png)
+
+Loading data as FlowSet object
+
+```{r}
+#| label: fcs-files-load
+
+fcs_dir <- file.path(data_folder_path)
+fcs_data <- read.flowSet(path=fcs_dir, pattern="*.fcs", transformation = FALSE, truncate_max_range = FALSE) 
+fcs_colname <- colnames(fcs_data)
+```
+
+## FCS files transformation and downsampling
+
+Data transformation is made using formula asinh(x/cofactor) (default value for cofactor is 3000)
+
+![Example of flurochrome density for one sample after transformation](images/FCS_PerCP-A_flurochrome_transformed_density.png)
+
+Transforming data from range -10^7^..10^7^ to range -10..10
+
+```{r}
+#| label: fcs-data-transform
+#| output: false
+
+l <- length(fcs_colname)
+transformation_cofactors <- rep(transformation_cofactor, l)
+fcs_transform <- transFlowVS(fcs_data, channels = fcs_colname, transformation_cofactors)
+sampleNames(fcs_transform) <- sampleNames(fcs_data)
+```
+
+Downsampling files for same number of events from each sample and decreasing processing time
+
+![](images/Downsampling_example.png)
+
+```{r}
+#| label: fcs-data-downsample
+
+fcs_transform_downsampled <- Downsampling_FlowSet(fcs_transform, samplesize = downsampling_count, seed_number = seed_number)
+```
+
+## Transformed and downsampled FCS files saving
+
+```{r}
+#| label: fcs-output-files-save
+#| output: false
+
+write.flowSet(fcs_transform, outdir = fcs_transformed_dir)
+
+write.flowSet(fcs_transform_downsampled, outdir = fcs_transformed_downsampled_dir)
+```
