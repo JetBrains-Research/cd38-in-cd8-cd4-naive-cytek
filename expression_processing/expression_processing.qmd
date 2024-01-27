@@ -191,6 +191,8 @@ construct_sce <- function(sce, expression_subtable) {
   sce_created@int_colData@listData$reducedDims$UMAP <- as.matrix(expression_subtable[c("UMAP1", "UMAP2")])
   sce_created@colData$cluster_id <- expression_subtable$Cluster
   sce_created$sample_id <- expression_subtable$sample_id
+  sce_created@metadata$cluster_codes <- data.frame(as.factor(1:100))
+  colnames(sce_created@metadata$cluster_codes) <- c("som100")
   
   sce_created
 }
