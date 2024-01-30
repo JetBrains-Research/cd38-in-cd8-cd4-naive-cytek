@@ -9,15 +9,3 @@ For expression_processing step is required folder Transformed_Samples_Downsample
 visualization.qmd step creates final figures using intermediate files from Intermediate_Pipeline_Files folder.
 
 ![](images/Pipeline_scheme.png)
-
-If you face error similar to this during expression_processing.qmd step:
-
-```         
-Warning in gzfile(file, "wb") :
-  cannot open compressed file './cd38-in-cd8-cd4-naive-cytek/.Rproj.user/shared/notebooks/23EAD2A9-expression_processing/1/96DEFFDB4f142241/cdkbhoo15k5mv_t/a6c60ec25e5f474fb1522d9626be1e7a.snapshot', probable reason 'No such file or directory'
-Error in gzfile(file, "wb") : cannot open the connection
-Error in dev.off() : 
-  QuartzBitmap_Output - unable to open file './cd38-in-cd8-cd4-naive-cytek/.Rproj.user/shared/notebooks/23EAD2A9-expression_processing/1/96DEFFDB4f142241/cdkbhoo15k5mv_t/_rs_chunk_plot_001.png'
-```
-
-Just ignore it and rerun ggplot function for current chunk.
