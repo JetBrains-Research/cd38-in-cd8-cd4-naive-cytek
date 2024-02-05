@@ -47,6 +47,8 @@ fcs_transformed_downsampled_dir <- paste0(input_dir, "Transformed_Samples_Downsa
 fluorochromes_markers_map_path <- paste0(input_dir, "Cytometry_Panel_for_pipeline.csv")
 age_group_map <- list("A" = "A", "G" = "A", "M" = "A", "FA" = "A", "FG" = "A", "B" = "B", "H" = "B", "N" = "B", "FB" = "B", "FH" = "B", "C" = "C", "J" = "C", "P" = "C", "FC" = "C", "FJ" = "C", "D" = "D", "K" = "D", "S" = "D", "FD" = "D", "FK" = "D", "E" = "E", "L" = "E", "T" = "E", "FE" = "E", "FL" = "E", "A-T" = "T-A")
 
+dir.create(output_dir, showWarnings = FALSE)
+
 donors_info <- read.table(paste0(input_dir, "Samples_Metadata_for_pipeline.csv"), sep = ";", header=TRUE)
 donors_info <- donors_info[c("Tube.ID", "Age")]
 
@@ -94,7 +96,7 @@ Creating files dataframe
 
 md <- data.frame(names(fcs_transform_downsampled@frames))
 colnames(md) <- "Sample_ID"
-md <- data.frame(md[order(md["Sample_ID"]),])
+md <- data.frame(md[order(md[,"Sample_ID"]),])
 colnames(md) <- "Sample_ID"
 
 file_names <- list.files(fcs_transformed_downsampled_dir)
