@@ -520,6 +520,7 @@ expression_CD8_naive_selected_no_outliers_clustered$age_group <- unlist(age_grou
 write.table(expression_CD8_naive_selected_no_outliers_clustered[,!names(expression_CD8_naive_selected_no_outliers_clustered) %in% c("cluster_id", "reducedDims.UMAP.UMAP1", "reducedDims.UMAP.UMAP2")], paste0(output_dir, "Expression_and_metadata_CD8_naive_cells_6_cluster_marker_quantile_normalized.csv"), sep = ";", row.names = FALSE)
 
 expression_CD8_naive_export <- expression_CD8_selected_clustered[expression_CD8_selected_clustered$Cluster %in% cd8_naive_selected_clusters,]
+expression_CD8_naive_export <- expression_CD8_naive_export[!(expression_CD8_naive_export$sample_id %in% c("pb088-E06", "pb089-E12", "pb086-D01")),]
 
 write.table(expression_CD8_naive_export[,!names(expression_CD8_naive_export) %in% c("UMAP1", "UMAP2", "cluster_id", "reducedDims.UMAP.UMAP1", "reducedDims.UMAP.UMAP2", "Cluster")], paste0(output_dir, "Expression_and_metadata_CD8_naive_cells_not_quantile_normalized.csv"), sep = ";", row.names = FALSE)
 
