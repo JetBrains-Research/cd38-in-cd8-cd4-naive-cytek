@@ -1,10 +1,15 @@
 ---
 title: "Results visualization"
-subtitle: "Paper UMAPs, density plots, boxplots generation"
+subtitle: "Paper UMAPs, density plots, boxplots, statplots generation"
 author: "Petr Tsurinov"
 date: "01/26/2024"
 date-format: long
 format: html
+lightbox:
+  match: auto
+  effect: zoom
+  desc-position: right
+  loop: true
     
 knitr:
   opts_chunk: 
@@ -47,10 +52,8 @@ s_cols_grad <- c("#93cf92", "#87b2d4", "#ef7577", "#c195c8", "#ffb266", "#ffffff
 expression_selected_features <- c("CxCR3", "CD38", "CD25", "CD3", "CD8", "CD4", "gdTCR", "TRAV2", "CD127", "CCR7", "CD45RA", "Fas", "PTK7")
 threshold_selected_features <- c("CxCR3", "CD38", "CD25", "PTK7")
 join_selected_features <- c("CxCR3", "CD38", "CD25")
-thresholds_siqma_coef <- list("CD8" = list("CxCR3" = 3, "CD38" = 3.49, "CD25" = 1.7, "PTK7" = 3), 
-                              "CD4" = list("CxCR3" = 6, "CD38" = 2.145, "CD25" = 2, "PTK7" = 3))
-thresholds_coef <- list("CD8" = list("CxCR3" = 0, "CD38" = 0, "CD25" = 0, "PTK7" = 0), 
-                        "CD4" = list("CxCR3" = 0.7, "CD38" = 2.8, "CD25" = 0.7, "PTK7" = 0))
+thresholds_coef <- list("CD8" = list("CxCR3" = 1.2, "CD38" = 2.1, "CD25" = 0.68, "PTK7" = 0.85), 
+                        "CD4" = list("CxCR3" = 0.7, "CD38" = 2.8, "CD25" = 0.7, "PTK7" = 0.85))
 
 comparisons <- list(c("A", "E"))
 
@@ -106,8 +109,11 @@ ggplot(donors_info %>% arrange(donors_info[["age_group"]]), aes(x=Age, fill=age_
 ## Visualization of UMAPs expression for selected features and threshold densities plots creation
 
 ```{r fig.height=6, fig.width=8}
-#| label: expression-UMAPs
+#| label: expression-UMAPs-and-thresholds
 #| output-location: slide
+#| lightbox:
+#|   group: expression-UMAPs-and-thresholds
+#| layout: [[1,1,1], [1,1,1], [1,1,1], [1,1,1], [1,1,1], [1,1,-1], [1,1,1], [1,1,1], [1,1,1], [1,1,1], [1,1,1], [1,1,-1]]
 
 for(cell_type in names(cells_df_list)) {
   cells_df <- cells_df_list[[cell_type]]
@@ -140,17 +146,6 @@ for(cell_type in names(cells_df_list)) {
   cells_df_qnormed$cell_subtype <- "Mature"
   
   for(feature in rev(threshold_selected_features)) {
-    cells_df_merged_samples <- cells_df
-    cells_df_merged_samples$sample_id <- "Merged"
-    feature_merged_samples_fit_parameters <- fit_one_gaussian_and_return_parameters(cells_df_merged_samples, feature)
-    
-    feature_threshold <- (feature_merged_samples_fit_parameters["Merged", "mu"] + 
-                            thresholds_siqma_coef[[cell_type]][[feature]] * 
-                            feature_merged_samples_fit_parameters["Merged", "sigma"])
-    if(thresholds_coef[[cell_type]][[feature]] == 0) {
-      thresholds_coef[[cell_type]][[feature]] <- feature_threshold
-    }
-    
     if(feature %in% join_selected_features) {
       cells_df[cells_df[feature] > thresholds_coef[[cell_type]][[feature]], "cell_subtype"] <- paste0(feature, "+")
       cells_df_qnormed[cells_df_qnormed[feature] > thresholds_coef[[cell_type]][[feature]], "cell_subtype"] <- paste0(feature, "+")
@@ -175,6 +170,9 @@ for(cell_type in names(cells_df_list)) {
 
 ```{r fig.height=5.5, fig.width=7}
 #| label: cell-subtypes-UMAPs
+#| layout: [[1,1,1], [1,1,-1], [1,1,1], [1,1,-1]]
+#| lightbox:
+#|   group: cell-subtypes-UMAPs
 
 legend_titles <- list("CxCR3" = "CxCR3 high", "CD38" = "CD38 high  ", "CD25" = "CD25 high  ", "PTK7" = "PTK7 high  ")
 
@@ -261,7 +259,9 @@ stat_plot_creation <- function(dunn_test_result, title) {
 ```
 
 ```{r fig.height=6, fig.width=10}
-#| label: boxplots-construction
+#| label: boxplots-and-statplots
+#| lightbox:
+#|   group: boxplots-and-statplots
 
 column_names <- c('naive_percent', 'CxCR3+', 'CD38+', 'CD25+', 'PTK7+', 'Mature')
 stat_fill <- c("#d2228e","#d46dac","#ed90c9","#6dbbd4","white")

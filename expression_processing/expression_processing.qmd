@@ -11,7 +11,7 @@ knitr:
     collapse: true
     
 execute:
-  freeze: auto  # re-render only when source changes
+  freeze: true  # re-render only when source changes
 ---
 
 ## Loading libraries and defining constants
@@ -204,7 +204,7 @@ create_expression_umap_raster <- function(sce, expression_subtable, feature, fea
   plot <- plotDR_2(sce_for_umap, "UMAP", color_by = feature, scale = FALSE, 
            a_pal = rev(hcl.colors(3, "Spectral")), color_range = c(0, as.numeric(feature_max)), 
            used_in_clustering = "") + 
-    geom_text(data = centers.umap, aes(label = Cluster, x = UMAP1, y = UMAP2), size = 2, color = "black")  +
+    geom_text(data = centers.umap, aes(label = Cluster, x = UMAP1, y = UMAP2), size = 4, color = "black")  +
     theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
           panel.background = element_blank(), axis.line = element_line(colour = "black"), 
           text = element_text(size = 10))
