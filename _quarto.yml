@@ -20,6 +20,7 @@ bibliography: references.bib
 
 format:
   html:
+    df-print: paged
     theme: [cosmo, styling/jb.scss]
     execute:
       echo: true

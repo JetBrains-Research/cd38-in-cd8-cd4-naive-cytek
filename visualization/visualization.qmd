@@ -30,7 +30,6 @@ library(CATALYST)
 library(stringr)
 library(ggplot2)
 library(dplyr)
-library("rasterpdf")
 library(minpack.lm)
 library(ggrastr)
 library(ggpubr)
@@ -52,41 +51,45 @@ s_cols_grad <- c("#93cf92", "#87b2d4", "#ef7577", "#c195c8", "#ffb266", "#ffffff
 expression_selected_features <- c("CxCR3", "CD38", "CD25", "CD3", "CD8", "CD4", "gdTCR", "TRAV2", "CD127", "CCR7", "CD45RA", "Fas", "PTK7")
 threshold_selected_features <- c("CxCR3", "CD38", "CD25", "PTK7")
 join_selected_features <- c("CxCR3", "CD38", "CD25")
-thresholds_coef <- list("CD8" = list("CxCR3" = 1.2, "CD38" = 2.1, "CD25" = 0.68, "PTK7" = 0.85), 
-                        "CD4" = list("CxCR3" = 0.7, "CD38" = 2.8, "CD25" = 0.7, "PTK7" = 0.85))
+thresholds_coef <- list("CD8" = list("CxCR3" = 1.5, "CD38" = 2.2, "CD25" = 0.75, "PTK7" = 0.85), 
+                        "CD4" = list("CxCR3" = 0.55, "CD38" = 2.75, "CD25" = 0.7, "PTK7" = 0.9))
 
 comparisons <- list(c("A", "E"))
 
 age_group_map <- list("A" = "A", "G" = "A", "M" = "A", "FA" = "A", "FG" = "A", "B" = "B", "H" = "B", "N" = "B", "FB" = "B", "FH" = "B", "C" = "C", "J" = "C", "P" = "C", "FC" = "C", "FJ" = "C", "D" = "D", "K" = "D", "S" = "D", "FD" = "D", "FK" = "D", "E" = "E", "L" = "E", "T" = "E", "FE" = "E", "FL" = "E")
 
 donors_info <- read.table(paste0(input_dir, "Samples_Metadata_for_pipeline.csv"), sep = ";", dec = ",", header=TRUE)
-donors_info <- donors_info[c("Tube.ID", "Donor.ID", "Age")]
+donors_info <- donors_info[c("Tube.ID", "Donor.ID", "Age", "Date.collected")]
+rownames(donors_info) <- donors_info$Tube.ID
+donors_info <- donors_info[-1]
+donors_info$age_group <- str_replace(str_replace(donors_info$Donor.ID, "\\d+", ""), "F", "")
+donors_info$Age <- as.numeric(donors_info$Age)
 
-features_max_df <- read.table(paste0(intermediate_dir, "features_max.csv"), sep = ";")
+features_max_df <- read.table(paste0(intermediate_dir, "features_max_158_donors.csv"), sep = ";")
 features_max <- as.list(setNames(features_max_df[[2]], features_max_df[[1]]))
 
-cd8_naive <- read.table(paste0(intermediate_dir, "Expression_and_metadata_CD8_naive_cells_not_quantile_normalized.csv"), sep = ";", header = TRUE)
-cd4_naive <- read.table(paste0(intermediate_dir, "Expression_and_metadata_CD4_naive_no_Tregs_not_quantile_normalized.csv"), sep = ";", header = TRUE)
+cd8_naive <- read.table(paste0(intermediate_dir, "Expression_and_metadata_CD8_naive_cells_158_donors.csv"), sep = ";", header = TRUE)
+cd4_naive <- read.table(paste0(intermediate_dir, "Expression_and_metadata_CD4_naive_cells_no_Tregs_158_donors.csv"), sep = ";", header = TRUE)
+cd4_memory <- read.table(paste0(intermediate_dir, "Expression_and_metadata_CD4_memory_cells_15.8_mln_initial.csv"), sep = ";", header = TRUE)
 
-cd8_naive_qnormed <- read.table(paste0(intermediate_dir, "Expression_and_metadata_CD8_naive_cells_6_cluster_marker_quantile_normalized.csv"), sep = ";", header = TRUE)
-cd4_naive_qnormed <- read.table(paste0(intermediate_dir, "Expression_and_metadata_CD4_naive_no_Tregs_6_cluster_markers_quantile_normalized.csv"), sep = ";", header = TRUE)
+cd8_naive <- cd8_naive[!(cd8_naive$sample_id == "E06"),]
+cd4_naive <- cd4_naive[!(cd4_naive$sample_id == "E06"),]
+cd4_memory <- cd4_memory[!(cd4_memory$sample_id == "E06"),]
 
-n_cells_CD8 <- read.table(paste0(intermediate_dir, "n.cells_CD8.csv"), sep = ";", header = TRUE)
-n_cells_CD4 <- read.table(paste0(intermediate_dir, "n.cells_CD4.csv"), sep = ";", header = TRUE)
+n_cells_CD8 <- read.table(paste0(intermediate_dir, "n.cells_CD8_158_donors.csv"), sep = ";", header = TRUE)
+n_cells_CD4 <- read.table(paste0(intermediate_dir, "n.cells_CD4_158_donors.csv"), sep = ";", header = TRUE)
+
+n_cells_CD8 <- n_cells_CD8[!(n_cells_CD8$sample_id == "E06"),]
+n_cells_CD4 <- n_cells_CD4[!(n_cells_CD4$sample_id == "E06"),]
 
 cells_df_list <- list("CD8" = cd8_naive, "CD4" = cd4_naive)
-cells_df_qnormed_list <- list("CD8" = cd8_naive_qnormed, "CD4" = cd4_naive_qnormed)
 n_cells_all_cells_list <- list("CD8" = n_cells_CD8, "CD4" = n_cells_CD4)
 ```
 
 ## Constructing age groups density plots
 
-```{r fig.height=6, fig.width=10}
+```{r fig.height=3, fig.width=5}
 #| label: agegroup-densities-plot
-
-rownames(donors_info) <- donors_info$Tube.ID
-donors_info <- donors_info[-1]
-donors_info$age_group <- str_replace(str_replace(donors_info$Donor.ID, "\\d+", ""), "F", "")
 
 age_group_labels <- c()
 age_groups_count <- table(donors_info$age_group)
@@ -94,7 +97,7 @@ for(age_group in c("A", "B", "C", "D", "E")) {
   age_group_labels <- c(age_group_labels, paste0(age_group, " (", age_groups_count[[age_group]], " samples)"))
 }
 
-ggplot(donors_info %>% arrange(donors_info[["age_group"]]), aes(x=Age, fill=age_group, color=age_group)) +
+donors_density_plot <- ggplot(donors_info %>% arrange(donors_info[["age_group"]]), aes(x=Age, fill=age_group, color=age_group)) +
   geom_density(alpha=0.8) +
   scale_fill_manual(values=s_cols_grad, labels = age_group_labels) +
   scale_color_manual(values=s_cols_grad, labels = age_group_labels) + 
@@ -104,6 +107,7 @@ ggplot(donors_info %>% arrange(donors_info[["age_group"]]), aes(x=Age, fill=age_
   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
                   panel.background = element_blank(), axis.line = element_line(colour = "black"), 
                   text = element_text(size = 8))
+donors_density_plot
 ```
 
 ## Visualization of UMAPs expression for selected features and threshold densities plots creation
@@ -117,13 +121,12 @@ ggplot(donors_info %>% arrange(donors_info[["age_group"]]), aes(x=Age, fill=age_
 
 for(cell_type in names(cells_df_list)) {
   cells_df <- cells_df_list[[cell_type]]
-  cells_df_qnormed <- cells_df_qnormed_list[[cell_type]]
-  feature_names <- colnames(cells_df_qnormed)[feature_column_indexes]
+  feature_names <- colnames(cells_df)[feature_column_indexes]
   
-  sce <- SingleCellExperiment(list(counts=t(cells_df_qnormed[feature_names])))
-  sce@int_colData@listData$reducedDims$UMAP <- as.matrix(cells_df_qnormed[c("UMAP1", "UMAP2")])
+  sce <- SingleCellExperiment(list(counts=t(cells_df[feature_names])))
+  sce@int_colData@listData$reducedDims$UMAP <- as.matrix(cells_df[c("UMAP1", "UMAP2")])
   
-  temp_expression <- cells_df_qnormed
+  temp_expression <- cells_df
   temp_expression[feature_column_indexes][temp_expression[feature_column_indexes] < 0] <- 0
   
   for(feature in expression_selected_features) {
@@ -143,18 +146,16 @@ for(cell_type in names(cells_df_list)) {
   }
   
   cells_df$cell_subtype <- "Mature"
-  cells_df_qnormed$cell_subtype <- "Mature"
   
   for(feature in rev(threshold_selected_features)) {
     if(feature %in% join_selected_features) {
       cells_df[cells_df[feature] > thresholds_coef[[cell_type]][[feature]], "cell_subtype"] <- paste0(feature, "+")
-      cells_df_qnormed[cells_df_qnormed[feature] > thresholds_coef[[cell_type]][[feature]], "cell_subtype"] <- paste0(feature, "+")
     }
     
     print(ggplot(data = cells_df, aes_string(feature))+
         ggtitle(paste(feature, "threshold in", cell_type, "Naive cells") ) +
         geom_density(alpha = 0.8) +
-        geom_text(x=thresholds_coef[[cell_type]][[feature]], y=0.5, label=paste("Threshold:", format(round(thresholds_coef[[cell_type]][[feature]], 2), nsmall = 2)), 
+        geom_text(x=thresholds_coef[[cell_type]][[feature]], y=0.3, label=paste("Threshold:", format(round(thresholds_coef[[cell_type]][[feature]], 2), nsmall = 2)), 
                   check_overlap = TRUE) +
         geom_vline(xintercept = thresholds_coef[[cell_type]][[feature]],linetype="dashed") +
         xlab(feature)+
@@ -162,7 +163,6 @@ for(cell_type in names(cells_df_list)) {
   }
   
   cells_df_list[[cell_type]] <- cells_df
-  cells_df_qnormed_list[[cell_type]] <- cells_df_qnormed
 }
 ```
 
@@ -178,12 +178,11 @@ legend_titles <- list("CxCR3" = "CxCR3 high", "CD38" = "CD38 high  ", "CD25" = "
 
 for(cell_type in names(cells_df_list)) {
   cells_df <- cells_df_list[[cell_type]]
-  cells_df_qnormed <- cells_df_qnormed_list[[cell_type]]
   
   for(feature in threshold_selected_features) {
-    cells_df_qnormed[[paste0(feature, "_high")]] <- cells_df_qnormed[[feature]] > thresholds_coef[[cell_type]][[feature]]
+     cells_df[[paste0(feature, "_high")]] <-  cells_df[[feature]] > thresholds_coef[[cell_type]][[feature]]
     
-    print(rasterize(ggplot(cells_df_qnormed %>% arrange_(paste0(feature, "_high")), aes_string(x = "UMAP1", y = "UMAP2", color = paste0(feature, "_high"))) + 
+    print(rasterize(ggplot( cells_df, aes_string(x = "UMAP1", y = "UMAP2", color = paste0(feature, "_high"))) + 
         geom_point_rast(size = 0.01) +
         ggtitle(paste(cell_type, "Naive cells UMAP with high", feature, "cells selected")) +
         labs(color = legend_titles[[feature]]) + 
@@ -193,11 +192,10 @@ for(cell_type in names(cells_df_list)) {
   }
   
   cells_df$cell_subtype <- factor(cells_df$cell_subtype, levels = c(paste0(join_selected_features, "+"), "Mature"))
-  cells_df_qnormed$cell_subtype <- factor(cells_df_qnormed$cell_subtype, levels = c(paste0(join_selected_features, "+"), "Mature"))
-  
-  print(rasterize(ggplot(cells_df_qnormed %>% arrange(desc(cell_subtype)), aes(x = UMAP1, y = UMAP2, color = cell_subtype)) + 
+
+  print(rasterize(ggplot(cells_df, aes(x = UMAP1, y = UMAP2, color = cell_subtype)) + 
         geom_point_rast(size = 0.01) +
-        ggtitle(paste(cell_type, "Naive cells UMAP with selected markers")) +
+        ggtitle(paste(cell_type, "Naive cells UMAP")) +
         labs(color = "Cell subtype") + 
         scale_color_manual(values = c("#9B7A01", "#AA336A", "#023020", "#d3d3d3")) +
         theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
@@ -205,7 +203,6 @@ for(cell_type in names(cells_df_list)) {
               text = element_text(size = 20)) + guides(color = guide_legend(override.aes = list(size = 5))), layers='Point', dpi=150))
   
   cells_df_list[[cell_type]] <- cells_df
-  cells_df_qnormed_list[[cell_type]] <- cells_df_qnormed
 }
 ```
 
@@ -214,10 +211,10 @@ for(cell_type in names(cells_df_list)) {
 ```{r}
 #| label: dunn-and-plot-functions
 
-construct_dunn_test_table <- function(n_cells, feature, age_groups, subgroups_count, comparison_groups) {
-  n_cells$age_group <- as.factor(n_cells$age_group)
-  dunn_test_initial <- data.frame(Group1 = age_groups, Group2 = age_groups, P.adj = rep(Inf, length(age_groups)))
-  formula <- as.formula(paste0("n_cells[['", feature, "']] ~ n_cells[['age_group']]"))
+construct_dunn_test_table <- function(n_cells, feature, groups, subgroups_count, group_variable_name) {
+  n_cells[[group_variable_name]] <- as.factor(n_cells[[group_variable_name]])
+  dunn_test_initial <- data.frame(Group1 = groups, Group2 = groups, P.adj = rep(Inf, length(groups)))
+  formula <- as.formula(paste0("n_cells[['", feature, "']] ~ n_cells[['", group_variable_name, "']]"))
   dunn_test_result <- dunnTest(formula, data = n_cells, method="holm")$res
   dunn_test_result <- separate(dunn_test_result, "Comparison", c("Group1", "Group2"))[, c("Group1", "Group2", "P.adj")]
   dunn_test_result$P.adj <- pmin(dunn_test_result$P.adj * subgroups_count, 1)
@@ -227,10 +224,15 @@ construct_dunn_test_table <- function(n_cells, feature, age_groups, subgroups_co
   dunn_test_result
 }
 
+is_outlier <- function(x) {
+  return(x <= quantile(x, 0.25) - 1.5 * IQR(x) | x >= quantile(x, 0.75) + 1.5 * IQR(x))
+}
+
 box_plot_creation <- function(n_cells, feature, stat.test, title, s_cols_grad) {
   ggplot(n_cells, aes_string(x = "age_group", y = feature)) + 
-    geom_boxplot(outlier.size = 1.5,aes(fill=age_group), width=0.5) + 
-    geom_point(shape=21, size =1.5 , aes(fill=age_group)) + 
+    geom_boxplot(outlier.shape = NA, aes(fill=age_group), width=0.5) + 
+    #geom_text(aes(label=outlier), na.rm=TRUE, hjust=0.5, vjust=(runif(1, -1, 1)*2))+
+    geom_jitter(shape=21, size =1.5 , aes(fill=age_group), width = 0.1) + 
     scale_fill_manual(values = s_cols_grad) +
     stat_pvalue_manual(data = stat.test, label = "p.adj", xmin = "group1", xmax = "group2", y.position = "y.position") +
     theme(panel.grid.major = element_blank(), 
@@ -244,17 +246,29 @@ box_plot_creation <- function(n_cells, feature, stat.test, title, s_cols_grad) {
     ylab(title) + xlab("Age group")
 }
 
-stat_plot_creation <- function(dunn_test_result, title) {
-  ggplot(dunn_test_result, aes(x = Group2, y = Group1)) + 
-      geom_raster(aes(fill = significance)) +
-      labs(x = "Age group", y = "Age group", title = title) +
-      theme_bw() + scale_fill_manual(values =  stat_fill) +
-      geom_text(aes(label=significance), size = 5) + 
-      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), 
-            axis.line = element_line(colour = "black"), plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+stat_plot_creation <- function(dunn_test_result, groups_order, title, groups_name, label_variable, color_variable, coloring_type) {
+  dunn_test_result$Group1 <- factor(dunn_test_result$Group1, levels=groups_order)
+  dunn_test_result$Group2 <- factor(dunn_test_result$Group2, levels=groups_order)
+  dunn_test_result$P.adj <- formatC(dunn_test_result$P.adj, format = "e", digits = 0)
+  plot <- ggplot(dunn_test_result, aes(x = Group2, y = Group1)) + 
+      geom_raster(aes_string(fill = color_variable)) +
+      labs(x = groups_name, y = groups_name, title = title) +
+    #1.75
+      geom_text(aes_string(label="significance"), size = 4) + 
+      theme_bw()  +
+      theme(panel.grid.major = element_blank(),
+            panel.grid.minor = element_blank(), panel.background = element_blank(), 
+            axis.line = element_line(colour = "black"), plot.title = element_text(size = 12, face = "bold", hjust = 1),
             axis.text.x=element_text(size=12, colour = "black"), axis.title.x = element_text(size = 12),
             axis.title.y = element_text(size = 12), axis.text.y=element_text(size=12, colour = "black"),
             strip.text = element_text(size=11))
+  if(coloring_type == "discrete") {
+    plot <- plot + scale_fill_manual(values =  stat_fill)
+  } else {
+    plot <- plot + scale_fill_continuous(low = "#fbe6d6", high = "#a01218", na.value = NA, breaks = c(10, 20, 35, 45), labels = c(1e-10, 1e-20, 1e-35, 1e-45), guide_legend(title="P-value", labels = c(1e-10, 1e-20, 1e-35, 1e-45)))
+  }
+  
+  plot
 }
 ```
 
@@ -272,14 +286,14 @@ for(cell_type in names(cells_df_list)) {
   names <- c(paste('%', cell_type, 'Naive from', cell_type, 'T cells'), paste('%', cell_type, 'CxCR3+ from', cell_type, 'Naive'), paste('%', cell_type, 'CD38+ from', cell_type, 'Naive'), paste('%', cell_type, 'CD25+ from', cell_type, 'Naive'), paste('%', cell_type, 'PTK7+ from', cell_type, 'Naive'), paste('%', cell_type, 'Mature from', cell_type, 'Naive'))
   
   cells_df <- cells_df_list[[cell_type]]
-  cells_df$age_group <- unlist(age_group_map[str_replace(str_replace(cells_df$sample_id, ".*-", ""), "\\d+", "")])
+  cells_df$age_group <- unlist(age_group_map[str_replace(str_replace(cells_df$sample_id, ".*_", ""), "\\d+", "")])
   
   n_cells_naive <- cells_df %>%
         group_by(sample_id) %>%
         dplyr::mutate(total_naive = n()) %>%
           dplyr::select(sample_id, age_group, total_naive) %>%
         distinct()
-  
+
   n_cells_naive <- as.data.frame(n_cells_naive)
   rownames(n_cells_naive) <- n_cells_naive$sample_id
   n_cells_naive <- n_cells_naive[-1]
@@ -291,22 +305,24 @@ for(cell_type in names(cells_df_list)) {
   
   n_cells_naive_and_all <- merge(n_cells_with_memory, n_cells_naive["total_naive"], by="row.names", all.x = TRUE)
   rownames(n_cells_naive_and_all) <- n_cells_naive_and_all$Row.names
-  n_cells_naive_and_all <- n_cells_naive_and_all[-1]
+  colnames(n_cells_naive_and_all)[1] <- "sample_id"
   n_cells_naive_and_all[is.na(n_cells_naive_and_all$total_naive),"total_naive"] <- 0
   n_cells_naive_and_all$naive_percent <- n_cells_naive_and_all$total_naive / n_cells_naive_and_all$total_cells * 100.0
+  n_cells_naive_and_all <- n_cells_naive_and_all %>% group_by(age_group) %>%
+        mutate(outlier = ifelse(is_outlier(naive_percent), str_replace(sample_id, ".*_", ""), NA))
 
   box_plots <- list()
   stat_plots <- list()
   
   comparison_groups <- c("A", "E")
-  dunn_test_result <- construct_dunn_test_table(n_cells_naive_and_all, 'naive_percent', age_groups, 1, comparison_groups)
+  dunn_test_result <- construct_dunn_test_table(n_cells_naive_and_all, 'naive_percent', age_groups, 1, "age_group")
   stat_for_boxplot <- dunn_test_result[dunn_test_result$Group1 %in% comparison_groups & dunn_test_result$Group2 %in% comparison_groups & dunn_test_result$Group1 != dunn_test_result$Group2, ]$P.adj
   
   stat_test <- data.frame(group1 = "A", group2 = "E", p.adj = cut(unlist(stat_for_boxplot), c(0, 0.001, 0.01, 0.05, 1, Inf), c("***","**","*","ns", "")), y.position = max(n_cells_naive_and_all$naive_percent) * 1.1)
   
   box_plots[["main"]] <- box_plot_creation(n_cells_naive_and_all, "naive_percent", stat_test, paste("%", cell_type, "Naive in", cell_type, "T cells"), s_cols_grad)
     
-  stat_plots[["main"]] <- stat_plot_creation(dunn_test_result, paste("%", cell_type, "Naive in", cell_type, "T cells"))
+  stat_plots[["main"]] <- stat_plot_creation(dunn_test_result, age_groups, paste("%", cell_type, "Naive in", cell_type, "T cells"), "Age groups", "significance",  "significance", "discrete")
   
   box_stat_features <- c(paste0(join_selected_features, "+"), "PTK7+", "Mature")
   for(feature in box_stat_features) {
@@ -332,21 +348,50 @@ for(cell_type in names(cells_df_list)) {
     
     n_cells_feature_high_and_all[is.na(n_cells_feature_high_and_all)] <- 0
     rownames(n_cells_feature_high_and_all) <- n_cells_feature_high_and_all$Row.names
-    n_cells_feature_high_and_all <- n_cells_feature_high_and_all[-1]
+    colnames(n_cells_feature_high_and_all)[1] <- "sample_id"
     n_cells_feature_high_and_all$feature_high_percent <- n_cells_feature_high_and_all$total_feature_high / n_cells_feature_high_and_all$total_naive * 100.0
+    n_cells_feature_high_and_all <- n_cells_feature_high_and_all %>% group_by(age_group) %>%
+        mutate(outlier = ifelse(is_outlier(feature_high_percent), str_replace(sample_id, ".*_", ""), NA))
 
-    dunn_test_result <- construct_dunn_test_table(n_cells_feature_high_and_all, 'feature_high_percent', age_groups, length(box_stat_features), comparison_groups)
+    dunn_test_result <- construct_dunn_test_table(n_cells_feature_high_and_all, 'feature_high_percent', age_groups, length(box_stat_features), "age_group")
     stat_for_boxplot <- dunn_test_result[dunn_test_result$Group1 %in% comparison_groups & dunn_test_result$Group2 %in% comparison_groups & dunn_test_result$Group1 != dunn_test_result$Group2, ]$P.adj
     
     stat_test <- data.frame(group1 = "A", group2 = "E", p.adj = cut(unlist(stat_for_boxplot), c(0, 0.001, 0.01, 0.05, 1, Inf), c("***","**","*","ns", "")), y.position = max(n_cells_feature_high_and_all$feature_high_percent) * 1.1)
     
     box_plots[[feature]] <- box_plot_creation(n_cells_feature_high_and_all, "feature_high_percent", stat_test, paste0("% ", cell_type, " Naive ", feature, " in ", cell_type, " Naive"), s_cols_grad)
     
-    stat_plots[[feature]] <- stat_plot_creation(dunn_test_result, paste0("% ", cell_type, " Naive ", feature, " in ", cell_type, " Naive"))
+    stat_plots[[feature]] <- stat_plot_creation(dunn_test_result, age_groups, paste0("% ", cell_type, " Naive ", feature, " in ", cell_type, " Naive"), "Age group", "significance", "significance", "discrete")
   }
   
   print(ggarrange(box_plots$`main`, box_plots$`CxCR3+`, box_plots$`CD38+`, box_plots$`CD25+`, box_plots$`PTK7+`, box_plots$`Mature`, ncol = 3, nrow = 2))
-  
   print(ggarrange(stat_plots$`main`, stat_plots$`CxCR3+`, stat_plots$`CD38+`, stat_plots$`CD25+`, stat_plots$`PTK7+`, stat_plots$`Mature`, ncol = 3, nrow = 2))
+}
+```
+
+```{r}
+cd4_memory_median <- cd4_memory %>%
+  group_by(sample_id) %>% 
+  summarise_each(funs(median), Fas, CD45RA, CCR7, CD28, CD27, CD127, CxCR3, CD25, CD38)
+cd4_memory_median$cell_subtype <- "Memory"
+
+cd4_naive <- cells_df_list[["CD4"]]
+cd4_naive_median <- cd4_naive %>%
+  group_by(sample_id, cell_subtype) %>% 
+  summarise_each(funs(median), Fas, CD45RA, CCR7, CD28, CD27, CD127, CxCR3, CD25, CD38)
+
+for(marker in c("Fas", "CD45RA", "CCR7", "CD28", "CD27", "CD127", "CxCR3", "CD25", "CD38")) {
+  print(ggplot(rbind(cd4_naive_median, cd4_memory_median), aes_string(x = "cell_subtype", y = marker, fill = "cell_subtype")) + 
+      geom_boxplot(outlier.size = 1.5, width=0.5) + 
+      geom_point(shape=21, size =1.5) + 
+      scale_fill_manual(values = c("#9B7A01", "#AA336A", "#023020", "#d3d3d3", "purple3")) +
+      theme(panel.grid.major = element_blank(), 
+            panel.grid.minor = element_blank(), panel.background = element_blank(), 
+            axis.line = element_line(colour = "black"), plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+            axis.text.x=element_text(size=12, colour = "black"), 
+            axis.title.x = element_text(size = 10),
+            axis.title.y = element_text(size = 10),
+            axis.text.y=element_text(size=12, colour = "black"), 
+            strip.text = element_text(size=11)) + 
+      ylab(paste(marker, "median in CD4 naive subtypes and memory, MFI")) + xlab("Cell subtype"))
 }
 ```

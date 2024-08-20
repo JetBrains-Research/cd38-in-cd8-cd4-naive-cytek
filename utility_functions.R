@@ -97,7 +97,7 @@ plotDR_2 <- function(x, dr = NULL,
   # get axes labels
   if (dr == "PCA") {
     labs <- paste0("PC", dims)
-  } else labs <- paste(dr, "dim.", dims)
+  } else labs <- paste0(dr, "_", dims)
   
   # remove cells for which no reduced dimensions are available
   df <- df[!(is.na(df$x) | is.na(df$y)), ]
