@@ -242,7 +242,7 @@ Constructing UMAP for all events based on technical markers
 #| label: odd-events-removal
 
 expression <- construct_expression_table(sce, non_genes_no_time, n_threads = n_threads, seed_number = seed_number)
-expression <- cluster_expression(expression, non_genes_no_time, 20, 1.0, TRUE, seed_number)
+expression <- cluster_expression(expression, non_genes_no_time, 100, 1.0, TRUE, seed_number)
 
 centers.umap_clearing <- expression %>% 
   dplyr::group_by(Cluster) %>% 
@@ -340,7 +340,7 @@ Checking that cleared events don't produce separate islands during clustering on
 #qc on technical features after cleaning
 sce_created <- construct_sce(sce, expression_filtered)
 expression_filtered_clustered <- construct_expression_table(sce_created, non_genes_no_time, n_threads = n_threads, seed_number = seed_number)
-expression_filtered_clustered <- cluster_expression(expression_filtered_clustered, non_genes_no_time, 20, 1.0, TRUE, seed_number)
+expression_filtered_clustered <- cluster_expression(expression_filtered_clustered, non_genes_no_time, 100, 1.0, TRUE, seed_number)
 
 centers.umap_filtered <- expression_filtered_clustered %>% 
   dplyr::group_by(Cluster) %>% 
@@ -355,12 +355,12 @@ ggplot(expression_filtered_clustered, aes(UMAP1, UMAP2, color = Cluster)) +
           text = element_text(size = 10))
 ```
 
-## Clustering all cells on all biological markers
+## Clustering all cells on 8 main biological markers
 
 ```{r fig.width=5, fig.height=5}
 #| label: all-cells-clusterization
 
-genes <- str_replace(as.vector(panel[panel$marker_class == "type", "antigen"]), "-", ".")
+genes <- c("CD3", "CD4", "CD8", "CD14", "CD19", "CD56", "CD25", "CD45RA")
 
 sce_created <- construct_sce(sce, expression_filtered)
 expression_all_genes_clustered <- construct_expression_table(sce_created, genes, n_threads = n_threads, seed_number = seed_number)
@@ -383,13 +383,15 @@ for(feature in c("CD3")) {
 }
 ```
 
-## Clustering T cells on all biological markers
+## Clustering T cells on 8 main biological markers
 
 ```{r fig.width=5, fig.height=5}
 #| label: cd3-cells-clusterization
 
 #Cluster numbers may differ, update according to UMAPs produced in previous chunk
 expression_CD3_selected <- expression_all_genes_clustered[expression_all_genes_clustered$Cluster %in% c(1, 11, 10, 31, 7, 14, 4, 23, 13, 22, 26, 6, 34, 8, 15, 24, 9, 28, 17),]
+
+genes <- c("CD3", "CD4", "CD8", "CD14", "CD19", "CD56", "CD25", "CD45RA")
 
 sce_created <- construct_sce(sce, expression_CD3_selected)
 expression_CD3_selected_clustered <- construct_expression_table(sce_created, genes, n_threads = n_threads, seed_number = seed_number)
@@ -430,10 +432,12 @@ expression_CD8_selected <- expression_CD3_selected_clustered[expression_CD3_sele
 expression_CD4_selected <- expression_CD3_selected_clustered[expression_CD3_selected_clustered$Cluster %in% c(22, 23, 3, 1, 6, 16, 7, 9, 12, 2, 11, 14, 17),]
 ```
 
-## Clustering CD8 T cells on all biological markers
+## Clustering CD8 T cells on 18 biological markers
 
 ```{r fig.width=5, fig.height=5}
 #| label: cd8-cells-clusterization
+
+genes <- c("Fas", "CD45RA", "KLRG1", "Cx3CR1", "GzmB", "CD8", "GzmK", "CD27", "CD28", "CD56", "TRAV2", "gdTCR", "CCR7", "NKp80", "CD31", "CD4", "CCR4", "CD159c")
 
 sce_created <- construct_sce(sce, expression_CD8_selected)
 expression_CD8_selected_clustered <- construct_expression_table(sce_created, genes, n_threads = n_threads, seed_number = seed_number)
@@ -464,9 +468,7 @@ for(feature in c("CD45RA", "CCR7", "Fas")) {
 }
 ```
 
-## Clustering CD8 naive T cells on all biological markers
-
-Clustering CD8 naive cells on 6 markers - CD27, CD127, CD38, CD25, CxCR3, CD28
+## Clustering CD8 naive T cells on 4 biological markers
 
 ```{r}
 #| label: cd8-naive-cells-clusterization
@@ -475,11 +477,11 @@ Clustering CD8 naive cells on 6 markers - CD27, CD127, CD38, CD25, CxCR3, CD28
 cd8_naive_selected_clusters <- c(1, 7, 9)
 expression_CD8_naive_selected <- expression_CD8_selected_clustered[expression_CD8_selected_clustered$Cluster %in% cd8_naive_selected_clusters,]
 
-genes <- c("CD27", "CD127", "CD38", "CD25", "CxCR3", "CD28")
+genes <- c("CD27", "CD38", "CD25", "CxCR3")
 
 sce_created <- construct_sce(sce, expression_CD8_naive_selected)
 expression_CD8_naive_selected_clustered <- construct_expression_table(sce_created, genes, 15, 0.3)
-expression_CD8_naive_selected_clustered <- cluster_expression(expression_CD8_naive_selected_clustered, genes, 100, 0.23, TRUE)
+expression_CD8_naive_selected_clustered <- cluster_expression(expression_CD8_naive_selected_clustered, genes, 20, 0.065, TRUE)
 
 centers.umap_CD8_naive <- expression_CD8_naive_selected_clustered %>% 
   dplyr::group_by(Cluster) %>% 
@@ -524,17 +526,16 @@ n.cells_CD8 <- expression_CD8_selected %>%
 write.table(n.cells_CD8, paste0(output_dir, "n.cells_CD8_158_donors.csv"), sep = ";", row.names = FALSE)
 ```
 
-## Clustering CD4 T cells on all biological markers except TRAV2
+## Clustering CD4 T cells on 10 biological markers
 
 ```{r fig.width=5, fig.height=5}
 #| label: cd4-cells-clusterization
 
-genes <- str_replace(as.vector(panel[panel$marker_class == "type", "antigen"]), "-", ".")
-genes <- setdiff(genes, c("TRAV2"))
+genes <- c("CD4", "Fas", "CD45RA", "CD8", "Cx3CR1", "gdTCR", "CD56", "CD14", "CD19", "CD3")
 
 sce_created <- construct_sce(sce, expression_CD4_selected)
 expression_CD4_selected_clustered <- construct_expression_table(sce_created, genes, n_threads = n_threads, seed_number = seed_number)
-expression_CD4_selected_clustered <- cluster_expression(expression_CD4_selected_clustered, genes, 100, 1.0, TRUE, seed_number)
+expression_CD4_selected_clustered <- cluster_expression(expression_CD4_selected_clustered, genes, 20, 0.4, TRUE, seed_number)
 
 centers.umap_CD4 <- expression_CD4_selected_clustered %>% 
   dplyr::group_by(Cluster) %>% 
@@ -556,12 +557,12 @@ ggplot(expression_CD4_selected_clustered, aes(UMAP1, UMAP2, color = Cluster)) +
 #|   group: cd4-cells-UMAPs-expression
 #| layout-ncol: 3
 
-for(feature in c("CD19", "CD14", "CD56", "gdTCR", "CD8", "CD28")) {
+for(feature in c("CD19", "CD14", "CD56", "gdTCR", "CD8")) {
   print(create_expression_umap_raster(sce, expression_CD4_selected_clustered, feature, features_max[[feature]], centers.umap_CD4) + theme(legend.position = "none"))
 }
 ```
 
-## Clustering CD4 T cells without leftover doublets, NK cells, γδT cells, CD8+ cells on all biological markers except TRAV2
+## Clustering CD4 T cells without leftover doublets, NK cells, γδT cells, CD8+ cells on 6 biological markers
 
 ```{r}
 #| label: cd4-first-filtering-clusterization
@@ -569,12 +570,11 @@ for(feature in c("CD19", "CD14", "CD56", "gdTCR", "CD8", "CD28")) {
 #Cluster numbers may differ, update according to UMAPs produced in previous chunk
 expression_CD4_first_filtering <- expression_CD4_selected_clustered[!(expression_CD4_selected_clustered$Cluster %in% c(11, 12, 13, 14, 15, 16, 17)),]
 
-genes <- str_replace(as.vector(panel[panel$marker_class == "type", "antigen"]), "-", ".")
-genes <- setdiff(genes, c("TRAV2"))
+genes <- c("CD4", "Fas", "CD45RA", "CD8", "gdTCR", "CD3")
 
 sce_created <- construct_sce(sce, expression_CD4_first_filtering)
 expression_CD4_first_filtering_clustered <- construct_expression_table(sce_created, genes, n_threads = n_threads, seed_number = seed_number)
-expression_CD4_first_filtering_clustered <- cluster_expression(expression_CD4_first_filtering_clustered, genes, 100, 1.0, TRUE, seed_number)
+expression_CD4_first_filtering_clustered <- cluster_expression(expression_CD4_first_filtering_clustered, genes, 20, 0.4, TRUE, seed_number)
 
 centers.umap_CD4_first_filtering <- expression_CD4_first_filtering_clustered %>% 
   dplyr::group_by(Cluster) %>% 
@@ -592,7 +592,7 @@ for(feature in c("NKp80")) {
 }
 ```
 
-## Clustering filtered CD4 T cells without NKp80+ cells on 6 markers - CD8, CD4, CD3, gdTCR, Fas, CD45RA
+## Clustering filtered CD4 T cells without NKp80+ cells on 6 markers
 
 ```{r}
 #| label: cd4-second-filtering-clusterization
@@ -600,11 +600,11 @@ for(feature in c("NKp80")) {
 expression_CD4_second_filtering <- expression_CD4_first_filtering_clustered[!(expression_CD4_first_filtering_clustered$Cluster %in% c(11)),]
 
 sce_created <- construct_sce(sce, expression_CD4_second_filtering)
-genes <- str_replace(as.vector(panel[panel$marker_class == "type", "antigen"]), "-", ".")
+
 genes <- c("CD8", "CD4", "CD3", "gdTCR", "Fas", "CD45RA")
 
 expression_CD4_second_clearing_clustered <- construct_expression_table(sce_created, genes, n_threads = n_threads, seed_number = seed_number)
-expression_CD4_second_clearing_clustered <- cluster_expression(expression_CD4_second_clearing_clustered, genes, 20, 1.0, TRUE, seed_number)
+expression_CD4_second_clearing_clustered <- cluster_expression(expression_CD4_second_clearing_clustered, genes, 20, 0.4, TRUE, seed_number)
 
 centers.umap_CD4_second_clearing <- expression_CD4_second_clearing_clustered %>% 
   dplyr::group_by(Cluster) %>% 
@@ -654,18 +654,18 @@ rownames(fas_thresholds$thresholds) <- fas_thresholds$thresholds$sample_id
 cd45ra_high_fas_low_all_CD4 <- expression_CD4_cleared$CD45RA > cd45ra_final_thresholds$thresholds[expression_CD4_cleared$sample_id, "samples_thresholds"] & expression_CD4_cleared$Fas < fas_thresholds$thresholds[expression_CD4_cleared$sample_id, "samples_thresholds"]
 ```
 
-## Clustering naive CD4 T cells on 9 markers - CD4, CD3, CD45RA, CCR7, CxCR3, CD31, Fas, CD25, CD127
+## Clustering naive CD4 T cells on 8 markers
 
 ```{r}
 #| label: cd4-naive-clusterization
 
 expression_CD4_naive <- expression_CD4_cleared[cd45ra_high_fas_low_all_CD4,]
 
-genes <- c("CD4", "CD3", "CD45RA", "CCR7", "CxCR3", "CD31", "Fas", "CD25", "CD127")
+genes <- c("CD4", "CD3", "CD45RA", "CxCR3", "CD31", "Fas", "CD25", "CD127")
 
 sce_created <- construct_sce(sce, expression_CD4_naive)
 expression_CD4_naive_clustered <- construct_expression_table(sce_created, genes)
-expression_CD4_naive_clustered <- cluster_expression(expression_CD4_naive_clustered, genes, 100, 0.4, TRUE)
+expression_CD4_naive_clustered <- cluster_expression(expression_CD4_naive_clustered, genes, 100, 1.0, TRUE)
 
 centers.umap_CD4_naive <- expression_CD4_naive_clustered %>% 
   dplyr::group_by(Cluster) %>% 
@@ -683,7 +683,7 @@ for(feature in c("CD25")) {
 }
 ```
 
-## Clustering naive CD4 T cells without Tregs on 9 markers - CD38, CD25, CD127, CD27, CD28, CxCR3
+## Clustering naive CD4 T cells without Tregs on 4 markers 
 
 ```{r}
 #| label: cd4-naive-no-tregs-clusterization
@@ -692,11 +692,11 @@ for(feature in c("CD25")) {
 cd4_tregs_clusters <- c(6)
 expression_CD4_naive_no_Tregs <- expression_CD4_naive_clustered[!(expression_CD4_naive_clustered$Cluster %in% cd4_tregs_clusters),]
 
-genes <- c("CD38", "CD25", "CD127", "CD27", "CD28", "CxCR3")
+genes <- c("CD38", "CD25", "CD27", "CxCR3")
 
 sce_created <- construct_sce(sce, expression_CD4_naive_no_Tregs)
 expression_CD4_naive_no_Tregs_clustered <- construct_expression_table(sce_created, genes, 15, 0.3, n_threads = n_threads, seed_number = seed_number)
-expression_CD4_naive_no_Tregs_clustered <- cluster_expression(expression_CD4_naive_no_Tregs_clustered, genes, 20, 0.2, TRUE)
+expression_CD4_naive_no_Tregs_clustered <- cluster_expression(expression_CD4_naive_no_Tregs_clustered, genes, 20, 0.04, TRUE)
 
 centers.umap_CD4_naive_no_Tregs <- expression_CD4_naive_no_Tregs_clustered %>% 
   dplyr::group_by(Cluster) %>% 
@@ -739,6 +739,8 @@ n.cells_CD4 <- expression_CD4_selected %>%
 write.table(n.cells_CD4, paste0(output_dir, "n.cells_CD4_158_donors.csv"), sep = ";", row.names = FALSE)
 ```
 
+## Clustering memory CD4 T cells on 4 markers 
+
 ```{r}
 expression_CD4_memory <- expression_CD4_cleared[!cd45ra_high_fas_low_all_CD4,]
 
@@ -764,6 +766,7 @@ for(feature in c("CD25")) {
 }
 ```
 
+Exporting CD4 memory cells for further figures visualization 
 
 ```{r}
 #| label: cd4-cells-export
